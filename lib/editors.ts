@@ -81,6 +81,16 @@ export async function upsertEditor(input: UpsertEditorInput): Promise<Editor> {
   const chatId = input.telegramChatId.trim();
   if (!name) throw new Error("Name is required");
   if (!chatId) throw new Error("Telegram chat ID is required");
+  // Telegram chat_ids are signed integers (positive for users, negative
+  // for groups). @usernames and phone numbers do NOT work with bots'
+  // sendMessage — reject them up-front with a clear error.
+  if (!/^-?\d+$/.test(chatId)) {
+    throw new Error(
+      "Telegram chat ID must be a number (e.g. 123456789). " +
+        "@usernames and phone numbers don't work — DM @userinfobot " +
+        "on Telegram and copy the numeric 'Id' it shows.",
+    );
+  }
 
   const now = new Date().toISOString();
 

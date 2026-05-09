@@ -241,7 +241,28 @@ function EditorForm({
   }
 
   return (
-    <div className="px-5 py-4 bg-stone-50/40 grid sm:grid-cols-2 gap-3">
+    <div className="px-5 py-4 bg-stone-50/40 space-y-3">
+      <details className="text-xs text-muted bg-card border rounded-md px-3 py-2">
+        <summary className="cursor-pointer font-medium text-foreground">
+          How does the editor get their chat ID?
+        </summary>
+        <ol className="list-decimal pl-5 mt-2 space-y-1">
+          <li>
+            Open Telegram → search for{" "}
+            <span className="font-mono">@patrika_ai_editor_bot</span> →
+            click <span className="font-medium">Start</span> (or send any
+            message). This grants the bot permission to DM the editor.
+          </li>
+          <li>
+            Search for <span className="font-mono">@userinfobot</span> →
+            send any message → it replies with the editor&apos;s numeric{" "}
+            <span className="font-mono">Id</span>.
+          </li>
+          <li>Copy that numeric Id and paste it below.</li>
+        </ol>
+      </details>
+
+      <div className="grid sm:grid-cols-2 gap-3">
       <Field label="Display name">
         <input
           autoFocus
@@ -252,14 +273,16 @@ function EditorForm({
         />
       </Field>
       <Field
-        label="Telegram chat ID"
-        hint="Required. DM @userinfobot on Telegram to find your numeric chat ID."
+        label="Telegram chat ID (numeric)"
+        hint="Must be a number. @usernames and phone numbers don't work."
       >
         <input
           value={telegramChatId}
           onChange={(e) => setTelegramChatId(e.target.value)}
           placeholder="e.g. 123456789"
           className="w-full rounded-md border bg-card px-3 py-2 text-sm font-mono"
+          inputMode="numeric"
+          pattern="-?\d+"
         />
       </Field>
       <Field label="Notes (optional)">
@@ -297,6 +320,7 @@ function EditorForm({
         {error ? (
           <span className="text-sm text-red-700">{error}</span>
         ) : null}
+      </div>
       </div>
     </div>
   );
