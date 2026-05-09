@@ -9,6 +9,10 @@ type Props = {
   authorName?: string;
   matchedUser: Pick<User, "name" | "telegramChatId"> | null;
   editorialScore: number;
+  /** Number of active editors with chat IDs in the system. When >0,
+   *  Notify is always actionable — editors are real recipients even
+   *  if the author isn't mapped or has no chat ID. */
+  editorCount?: number;
   /** Visual size — "sm" for cards, "lg" for the article detail page. */
   size?: "sm" | "lg";
 };
@@ -18,6 +22,7 @@ export function NotifyAuthorButton({
   authorName,
   matchedUser,
   editorialScore,
+  editorCount = 0,
   size = "sm",
 }: Props) {
   const [busy, setBusy] = useState(false);
@@ -25,45 +30,50 @@ export function NotifyAuthorButton({
     null,
   );
 
-  // Only useful when the article is below threshold AND we have someone to ping.
+  // Only useful when the article is below threshold.
   if (editorialScore >= 80) return null;
 
-  // No byline at all → encourage adding one in users settings, but don't block UI
-  if (!authorName) {
-    return (
-      <Link
-        href="/settings#users"
-        className={
-          size === "lg"
-            ? "rounded-md border bg-stone-50 text-stone-700 px-3 py-1.5 text-sm hover:bg-stone-100"
-            : "text-[11px] text-muted hover:text-foreground"
-        }
-        title="No byline detected; add a default editor in Settings"
-      >
-        {size === "lg" ? "No byline detected" : "no byline"}
-      </Link>
-    );
-  }
+  const authorIsReachable =
+    !!matchedUser && !!matchedUser.telegramChatId;
+  const canNotify = authorIsReachable || editorCount > 0;
 
-  if (!matchedUser) {
-    return (
-      <Link
-        href="/settings#users"
-        className={
-          size === "lg"
-            ? "rounded-md border border-amber-300 bg-amber-50 text-amber-800 px-3 py-1.5 text-sm hover:bg-amber-100"
-            : "text-[11px] text-amber-700 hover:underline"
-        }
-        title={`Byline "${authorName}" doesn't match any user. Map it in Settings.`}
-      >
-        {size === "lg"
-          ? `+ Map "${authorName}"`
-          : `+ map "${truncate(authorName, 16)}"`}
-      </Link>
-    );
-  }
-
-  if (!matchedUser.telegramChatId) {
+  // If neither the author nor any editor can receive a message, surface
+  // a helpful link instead of a dead button. Three sub-cases for
+  // clarity, all of which point the editor at Settings to fix it.
+  if (!canNotify) {
+    if (!authorName) {
+      return (
+        <Link
+          href="/settings#editors"
+          className={
+            size === "lg"
+              ? "rounded-md border bg-stone-50 text-stone-700 px-3 py-1.5 text-sm hover:bg-stone-100"
+              : "text-[11px] text-muted hover:text-foreground"
+          }
+          title="No byline detected and no editors configured. Add an editor in Settings."
+        >
+          {size === "lg" ? "No byline · no editors" : "no recipients"}
+        </Link>
+      );
+    }
+    if (!matchedUser) {
+      return (
+        <Link
+          href="/settings#users"
+          className={
+            size === "lg"
+              ? "rounded-md border border-amber-300 bg-amber-50 text-amber-800 px-3 py-1.5 text-sm hover:bg-amber-100"
+              : "text-[11px] text-amber-700 hover:underline"
+          }
+          title={`Byline "${authorName}" doesn't match any user. Map it in Settings, or add an editor.`}
+        >
+          {size === "lg"
+            ? `+ Map "${authorName}"`
+            : `+ map "${truncate(authorName, 16)}"`}
+        </Link>
+      );
+    }
+    // matchedUser exists but no chat ID and no editors
     return (
       <Link
         href="/settings#users"
@@ -92,7 +102,7 @@ export function NotifyAuthorButton({
       if (!r.ok || !data.ok)
         throw new Error(data.error ?? "Telegram send failed");
       setDone({
-        text: `Sent to ${data.sent.userName}`,
+        text: data.summary ?? "Sent",
         tone: "good",
       });
     } catch (err) {
@@ -114,12 +124,30 @@ export function NotifyAuthorButton({
     );
   }
 
+  // Build a label that reflects who's actually getting pinged.
+  const label = (() => {
+    if (busy) return "Sending…";
+    if (authorIsReachable && editorCount > 0) {
+      return `Notify ${truncate(matchedUser!.name.split(" ")[0], 12)} + ${editorCount}`;
+    }
+    if (authorIsReachable) {
+      return `Notify ${truncate(matchedUser!.name.split(" ")[0], 12)}`;
+    }
+    return `Notify ${editorCount} editor${editorCount === 1 ? "" : "s"}`;
+  })();
+
+  const tooltip = authorIsReachable
+    ? editorCount > 0
+      ? `Send a Telegram nudge to ${matchedUser!.name} and ${editorCount} editor${editorCount === 1 ? "" : "s"}`
+      : `Send a Telegram nudge to ${matchedUser!.name}`
+    : `Send a Telegram nudge to ${editorCount} editor${editorCount === 1 ? "" : "s"}`;
+
   return (
     <button
       type="button"
       onClick={send}
       disabled={busy}
-      title={`Send a Telegram nudge to ${matchedUser.name}`}
+      title={tooltip}
       className={
         size === "lg"
           ? "inline-flex items-center gap-1.5 rounded-md bg-sky-600 text-white px-3 py-1.5 text-sm font-medium hover:bg-sky-700 disabled:opacity-60"
@@ -127,7 +155,7 @@ export function NotifyAuthorButton({
       }
     >
       <span aria-hidden="true">{busy ? "…" : "✈︎"}</span>
-      {busy ? "Sending…" : `Notify ${truncate(matchedUser.name.split(" ")[0], 12)}`}
+      {label}
     </button>
   );
 }

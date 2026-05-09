@@ -112,6 +112,23 @@ WHERE category IS NOT NULL
 ON CONFLICT (id) DO NOTHING;
 
 -- =========================================================================
+-- 4c. Editors (recipients of every low-score nudge)
+--     Separate from authors: editors don't have bylines and aren't
+--     auto-imported. They're manually added in Settings and receive a
+--     Telegram message for every article scoring < 80, regardless of
+--     who wrote it. Authors only get nudges for their own articles.
+-- =========================================================================
+CREATE TABLE IF NOT EXISTS editors (
+  id                TEXT PRIMARY KEY,
+  name              TEXT NOT NULL,
+  telegram_chat_id  TEXT NOT NULL,
+  active            BOOLEAN DEFAULT TRUE,
+  notes             TEXT,
+  created_at        TIMESTAMPTZ DEFAULT NOW(),
+  updated_at        TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- =========================================================================
 -- 5. Authors (replaces .data/users.json)
 --    Named app_users to avoid colliding with Supabase's `users` if used.
 -- =========================================================================
@@ -185,6 +202,7 @@ ALTER TABLE rule_results     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE slug_verdicts    ENABLE ROW LEVEL SECURITY;
 ALTER TABLE sections         ENABLE ROW LEVEL SECURITY;
 ALTER TABLE app_users        ENABLE ROW LEVEL SECURITY;
+ALTER TABLE editors          ENABLE ROW LEVEL SECURITY;
 ALTER TABLE cron_runs        ENABLE ROW LEVEL SECURITY;
 ALTER TABLE daily_snapshots  ENABLE ROW LEVEL SECURITY;
 ALTER TABLE gemini_usage     ENABLE ROW LEVEL SECURITY;

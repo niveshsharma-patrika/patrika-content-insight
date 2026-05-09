@@ -8,6 +8,7 @@ import { NotifyAuthorButton } from "@/components/NotifyAuthorButton";
 import { getConfig } from "@/lib/config";
 import { readCachedSlugVerdicts } from "@/lib/gemini";
 import { findUserForByline } from "@/lib/users";
+import { listEditors } from "@/lib/editors";
 import { categoryFromUrl, formatRelative } from "@/lib/utils";
 
 type Params = Promise<{ id: string }>;
@@ -24,6 +25,9 @@ export default async function ArticlePage({ params }: { params: Params }) {
   const cachedVerdicts = await readCachedSlugVerdicts([a.sitemap.url]);
   const slugVerdict = cachedVerdicts[a.sitemap.url] ?? null;
   const matchedUser = await findUserForByline(a.article.author);
+  const editorCount = (await listEditors({ activeOnly: true })).filter(
+    (e) => e.telegramChatId,
+  ).length;
   const telegramReady = !!cfg.telegramBotToken;
 
   const editorialResults = a.results.filter(
@@ -163,6 +167,7 @@ export default async function ArticlePage({ params }: { params: Params }) {
               authorName={a.article.author}
               matchedUser={matchedUser}
               editorialScore={a.editorialScore}
+              editorCount={editorCount}
               size="lg"
             />
           ) : (

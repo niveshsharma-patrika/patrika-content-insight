@@ -12,11 +12,13 @@ export function ArticleCard({
   ruleFilterId = null,
   slugVerdict,
   matchedUser = null,
+  editorCount = 0,
 }: {
   a: ArticleAnalysis;
   ruleFilterId?: string | null;
   slugVerdict?: SlugVerdict;
   matchedUser?: User | null;
+  editorCount?: number;
 }) {
   const id = articleId(a.sitemap.url);
   const cat = categoryFromUrl(a.sitemap.url);
@@ -144,6 +146,7 @@ export function ArticleCard({
             authorName={a.article.author}
             matchedUser={matchedUser}
             editorialScore={a.editorialScore}
+            editorCount={editorCount}
             size="sm"
           />
         </div>

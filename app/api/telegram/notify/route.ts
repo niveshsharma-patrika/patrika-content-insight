@@ -1,12 +1,23 @@
 import { NextResponse } from "next/server";
 import { getArticleAnalysisById } from "@/lib/analyze";
 import { findUserForByline } from "@/lib/users";
+import { listEditors } from "@/lib/editors";
 import {
   buildAuthorAlert,
   isTelegramConfigured,
   sendTelegramMessage,
 } from "@/lib/telegram";
 
+/**
+ * Manual "Notify" trigger from the dashboard. Fan-out rules match
+ * the cron's auto-nudge:
+ *   • The matched author (if any) gets a personal-tone message.
+ *   • Every active editor with a chat ID gets a heads-up message.
+ *   • Recipients are deduped by chat ID — author-who-is-also-an-editor
+ *     receives one message, framed as the author version.
+ *
+ * Returns a list of who was sent and who was skipped (with reason).
+ */
 export async function POST(req: Request) {
   const body = (await req.json().catch(() => null)) as Record<
     string,
@@ -21,7 +32,11 @@ export async function POST(req: Request) {
   }
   if (!(await isTelegramConfigured())) {
     return NextResponse.json(
-      { ok: false, error: "Telegram bot token not configured. Add it in Settings." },
+      {
+        ok: false,
+        error:
+          "Telegram bot token not configured. Set TELEGRAM_BOT_TOKEN env var.",
+      },
       { status: 400 },
     );
   }
@@ -29,7 +44,7 @@ export async function POST(req: Request) {
   const a = await getArticleAnalysisById(id);
   if (!a) {
     return NextResponse.json(
-      { ok: false, error: "Article not found in sitemap" },
+      { ok: false, error: "Article not found in DB" },
       { status: 404 },
     );
   }
@@ -40,65 +55,126 @@ export async function POST(req: Request) {
     );
   }
 
-  const user = await findUserForByline(a.article.author);
-  if (!user) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error: a.article.author
-          ? `No user mapping found for byline "${a.article.author}". Add the author in Settings.`
-          : "Article has no detected byline.",
-      },
-      { status: 404 },
-    );
+  const matchedUser = await findUserForByline(a.article.author);
+  const editors = (await listEditors({ activeOnly: true })).filter(
+    (e) => e.telegramChatId,
+  );
+
+  // Build the recipient set. Author wins on chat-ID collisions: if a
+  // person is both author and editor, they get the author-tone msg.
+  type Recipient = {
+    chatId: string;
+    name: string;
+    forEditor: boolean;
+  };
+  const byChat = new Map<string, Recipient>();
+  if (matchedUser?.active && matchedUser.telegramChatId) {
+    byChat.set(matchedUser.telegramChatId, {
+      chatId: matchedUser.telegramChatId,
+      name: matchedUser.name,
+      forEditor: false,
+    });
   }
-  if (!user.telegramChatId) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error: `User "${user.name}" has no Telegram chat ID. Set it in Settings → Users.`,
-      },
-      { status: 400 },
-    );
+  for (const ed of editors) {
+    if (byChat.has(ed.telegramChatId)) continue;
+    byChat.set(ed.telegramChatId, {
+      chatId: ed.telegramChatId,
+      name: ed.name,
+      forEditor: true,
+    });
   }
 
-  // Compose
+  if (byChat.size === 0) {
+    const reason = !matchedUser
+      ? a.article.author
+        ? `No user mapping for byline "${a.article.author}", and no editors configured.`
+        : "Article has no detected byline, and no editors configured."
+      : !matchedUser.telegramChatId
+        ? `Author "${matchedUser.name}" has no Telegram chat ID, and no editors configured.`
+        : "No active recipients with Telegram chat IDs.";
+    return NextResponse.json({ ok: false, error: reason }, { status: 400 });
+  }
+
+  // Compose the editorial-only top issues once — same payload for everyone.
   const topIssues = a.results
-    .filter(
-      (r) => !r.result.passed && r.rule.scope === "editorial",
-    )
-    .sort((x, y) =>
-      (y.rule.severity === "error" ? 3 : y.rule.severity === "warning" ? 2 : 1) -
-      (x.rule.severity === "error" ? 3 : x.rule.severity === "warning" ? 2 : 1),
+    .filter((r) => !r.result.passed && r.rule.scope === "editorial")
+    .sort(
+      (x, y) =>
+        (y.rule.severity === "error"
+          ? 3
+          : y.rule.severity === "warning"
+            ? 2
+            : 1) -
+        (x.rule.severity === "error"
+          ? 3
+          : x.rule.severity === "warning"
+            ? 2
+            : 1),
     )
     .slice(0, 4)
-    .map((r) => ({
-      title: r.rule.title,
-      message: r.result.message,
-    }));
+    .map((r) => ({ title: r.rule.title, message: r.result.message }));
 
-  const text = buildAuthorAlert({
-    authorName: user.name,
-    headline: a.sitemap.title || a.article.title || "(untitled)",
-    url: a.sitemap.url,
-    editorialScore: a.editorialScore,
-    topIssues,
-  });
+  const authorName =
+    matchedUser?.name ?? a.article.author?.trim() ?? "the author";
+  const headline = a.sitemap.title || a.article.title || "(untitled)";
 
-  try {
-    const r = await sendTelegramMessage(user.telegramChatId, text);
-    return NextResponse.json({
-      ok: true,
-      sent: {
-        userName: user.name,
-        chatId: user.telegramChatId,
-        messageId: r.messageId,
-      },
-    });
-  } catch (err) {
+  const sent: Array<{
+    name: string;
+    chatId: string;
+    forEditor: boolean;
+    messageId: number;
+  }> = [];
+  const failed: Array<{ name: string; chatId: string; error: string }> = [];
+
+  for (const r of byChat.values()) {
+    try {
+      const result = await sendTelegramMessage(
+        r.chatId,
+        buildAuthorAlert({
+          authorName,
+          headline,
+          url: a.sitemap.url,
+          editorialScore: a.editorialScore,
+          topIssues,
+          forEditor: r.forEditor,
+          editorName: r.forEditor ? r.name : undefined,
+        }),
+      );
+      sent.push({
+        name: r.name,
+        chatId: r.chatId,
+        forEditor: r.forEditor,
+        messageId: result.messageId,
+      });
+    } catch (err) {
+      failed.push({
+        name: r.name,
+        chatId: r.chatId,
+        error: (err as Error).message,
+      });
+    }
+  }
+
+  if (sent.length === 0) {
     return NextResponse.json(
-      { ok: false, error: (err as Error).message },
+      { ok: false, error: "All sends failed", failed },
       { status: 500 },
     );
   }
+
+  // Friendly toast text for the UI: "Sent to Aman + 2 editors" etc.
+  const authorSent = sent.find((s) => !s.forEditor);
+  const editorCount = sent.filter((s) => s.forEditor).length;
+  const summary = authorSent
+    ? editorCount > 0
+      ? `Sent to ${authorSent.name} + ${editorCount} editor${editorCount === 1 ? "" : "s"}`
+      : `Sent to ${authorSent.name}`
+    : `Sent to ${editorCount} editor${editorCount === 1 ? "" : "s"}`;
+
+  return NextResponse.json({
+    ok: true,
+    summary,
+    sent,
+    failed,
+  });
 }

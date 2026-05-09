@@ -10,6 +10,7 @@ import {
 import { getDb } from "@/lib/db";
 import { checkSlugsWithGemini } from "@/lib/gemini";
 import { ensureUsersForBylines, findUsersForBylines } from "@/lib/users";
+import { listEditors } from "@/lib/editors";
 import { ensureSectionsForUrls } from "@/lib/sections";
 import { runRules } from "@/lib/rules";
 import { buildAuthorAlert, sendTelegramMessage } from "@/lib/telegram";
@@ -299,8 +300,11 @@ async function run(req: Request) {
 
     // ---- Auto-nudge low-scoring articles.
     //      For each freshly scraped article, run the rules → compute
-    //      editorial score → if < 80 AND the byline maps to a user with
-    //      a Telegram chat ID → send the message right then.
+    //      editorial score → if < 80, send Telegram to:
+    //        a) the article's matched author (if they have a chat ID),
+    //        b) every active editor (they get every low-score nudge).
+    //      Recipients are de-duplicated by chat ID so a person who is
+    //      both author and editor is messaged only once.
     //      Telegram failures are logged but don't fail the cron.
     let nudgesSent = 0;
     let nudgesSkipped = 0;
@@ -309,6 +313,11 @@ async function run(req: Request) {
       // Bulk-resolve byline → user once, instead of one DB call per article.
       const bylines = successfulScrapes.map((s) => s.article.author);
       const matchedUsers = await findUsersForBylines(bylines);
+      // Editors are loaded once per tick — same set applies to every
+      // low-scoring article in the batch.
+      const editors = (await listEditors({ activeOnly: true })).filter(
+        (e) => e.telegramChatId,
+      );
 
       for (let i = 0; i < successfulScrapes.length; i++) {
         const { entry, article, url } = successfulScrapes[i];
@@ -340,7 +349,35 @@ async function run(req: Request) {
           nudgesSkipped += 1;
           continue;
         }
-        if (!user || !user.active || !user.telegramChatId) {
+
+        // Build the recipient set: author (if matched + has chat ID) + all editors.
+        // Dedup by chat ID so an author-who-is-also-an-editor gets one message.
+        type Recipient = {
+          chatId: string;
+          name: string;
+          forEditor: boolean;
+        };
+        const byChat = new Map<string, Recipient>();
+        const authorName =
+          user?.name ?? article.author?.trim() ?? "the author";
+        if (user && user.active && user.telegramChatId) {
+          byChat.set(user.telegramChatId, {
+            chatId: user.telegramChatId,
+            name: user.name,
+            forEditor: false,
+          });
+        }
+        for (const ed of editors) {
+          if (byChat.has(ed.telegramChatId)) continue; // dedup
+          byChat.set(ed.telegramChatId, {
+            chatId: ed.telegramChatId,
+            name: ed.name,
+            forEditor: true,
+          });
+        }
+        if (byChat.size === 0) {
+          // Nobody to notify — score is bad but no author chat ID and no
+          // editors configured. Count as skipped.
           nudgesSkipped += 1;
           continue;
         }
@@ -363,26 +400,30 @@ async function run(req: Request) {
           .slice(0, 4)
           .map((r) => ({ title: r.rule.title, message: r.result.message }));
 
-        try {
-          await sendTelegramMessage(
-            user.telegramChatId,
-            buildAuthorAlert({
-              authorName: user.name,
-              headline: article.title || entry.title || "(untitled)",
+        for (const r of byChat.values()) {
+          try {
+            await sendTelegramMessage(
+              r.chatId,
+              buildAuthorAlert({
+                authorName,
+                headline: article.title || entry.title || "(untitled)",
+                url,
+                editorialScore,
+                topIssues,
+                forEditor: r.forEditor,
+                editorName: r.forEditor ? r.name : undefined,
+              }),
+            );
+            nudgesSent += 1;
+          } catch (err) {
+            console.warn(
+              "[cron] telegram nudge failed:",
               url,
-              editorialScore,
-              topIssues,
-            }),
-          );
-          nudgesSent += 1;
-        } catch (err) {
-          console.warn(
-            "[cron] telegram nudge failed:",
-            url,
-            "→",
-            err instanceof Error ? err.message : String(err),
-          );
-          nudgesSkipped += 1;
+              "→",
+              err instanceof Error ? err.message : String(err),
+            );
+            nudgesSkipped += 1;
+          }
         }
       }
     }

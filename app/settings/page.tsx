@@ -1,10 +1,12 @@
 import Link from "next/link";
 import { getConfig } from "@/lib/config";
 import { UserManager } from "@/components/UserManager";
+import { EditorManager } from "@/components/EditorManager";
 import { SectionManager } from "@/components/SectionManager";
 import { CronHistory } from "@/components/CronHistory";
 import { GeminiUsage } from "@/components/GeminiUsage";
 import { listUsers } from "@/lib/users";
+import { listEditors } from "@/lib/editors";
 import { listSections } from "@/lib/sections";
 import { listCronRuns } from "@/lib/dashboardStats";
 import {
@@ -22,6 +24,7 @@ export default async function SettingsPage() {
   const [
     cfg,
     users,
+    editors,
     sections,
     cronRuns,
     geminiRows,
@@ -29,6 +32,7 @@ export default async function SettingsPage() {
   ] = await Promise.all([
     getConfig(),
     listUsers(),
+    listEditors(),
     listSections(),
     listCronRuns(50),
     listGeminiUsage(7),
@@ -65,6 +69,11 @@ export default async function SettingsPage() {
 
       <UserManager
         initialUsers={users}
+        telegramConfigured={!!cfg.telegramBotToken}
+      />
+
+      <EditorManager
+        initialEditors={editors}
         telegramConfigured={!!cfg.telegramBotToken}
       />
 

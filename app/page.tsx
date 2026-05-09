@@ -7,6 +7,7 @@ import { DatePicker } from "@/components/DatePicker";
 import { formatRelative } from "@/lib/utils";
 import { readCachedSlugVerdicts } from "@/lib/gemini";
 import { findUsersForBylines, type User } from "@/lib/users";
+import { listEditors } from "@/lib/editors";
 import { listSections } from "@/lib/sections";
 import { clampDateToWindow, dayHeaderLabel, todayInIST } from "@/lib/dates";
 
@@ -68,6 +69,13 @@ export default async function Page({
     id: s.id,
     label: s.displayName,
   }));
+
+  // Count active editors with chat IDs — drives the Notify button's
+  // "always actionable" behavior on cards even when an article's
+  // author has no chat ID.
+  const editorCount = (await listEditors({ activeOnly: true })).filter(
+    (e) => e.telegramChatId,
+  ).length;
 
   const sitemapTotal = dashboard.totalEntries;
   const lastTickRel = dashboard.lastCronTickAt
@@ -164,6 +172,7 @@ export default async function Page({
           allCategories={allCategories}
           slugVerdicts={slugVerdicts}
           userMap={userMap}
+          editorCount={editorCount}
           page={dashboard.page}
           pageCount={dashboard.pageCount}
           totalEntries={dashboard.totalEntries}

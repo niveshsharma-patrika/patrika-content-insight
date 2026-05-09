@@ -22,6 +22,7 @@ export function ComplianceSection({
   allCategories,
   slugVerdicts = {},
   userMap = {},
+  editorCount = 0,
   page,
   pageCount,
   totalEntries,
@@ -32,6 +33,7 @@ export function ComplianceSection({
   /** Just the visible page (24 articles by default). */
   pageArticles: ArticleAnalysis[];
   allCategories: SectionOption[];
+  editorCount?: number;
   slugVerdicts?: Record<string, SlugVerdict>;
   userMap?: Record<string, User | null>;
   page: number;
@@ -240,6 +242,7 @@ export function ComplianceSection({
                 ruleFilterId={ruleFilter?.id ?? null}
                 slugVerdict={slugVerdicts[a.sitemap.url]}
                 matchedUser={userMap[a.sitemap.url] ?? null}
+                editorCount={editorCount}
               />
             ))}
           </div>

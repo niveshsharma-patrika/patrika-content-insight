@@ -57,32 +57,58 @@ export async function sendTelegramMessage(
   return { messageId: data.result.message_id };
 }
 
-/** Compose the editorial-review notification payload. */
+/** Compose the editorial-review notification payload.
+ *
+ * Two variants depending on who the recipient is:
+ *   • author    → "Hi {authorName}, your article scored …"
+ *   • editor    → "Heads up — {authorName}'s article scored …"
+ *
+ * Both share the same body (headline, score, top issues, link) so a
+ * forwarded message reads identically.
+ */
 export function buildAuthorAlert(input: {
   authorName: string;
   headline: string;
   url: string;
   editorialScore: number;
   topIssues: Array<{ title: string; message?: string }>;
+  /** Whether this message is going to an editor (not the author). */
+  forEditor?: boolean;
+  /** The editor's display name, used in the greeting line. */
+  editorName?: string;
 }): string {
   const issues = input.topIssues
     .slice(0, 4)
     .map((i) => `• ${escape(i.message || i.title)}`)
     .join("\n");
 
+  const greeting = input.forEditor
+    ? input.editorName
+      ? `Hi ${escape(input.editorName)} — heads up on a low-scoring article:`
+      : `Heads up on a low-scoring article:`
+    : `Hi ${escape(input.authorName)},`;
+
+  const scoreLine = input.forEditor
+    ? `<b>${escape(input.authorName)}</b>'s article scored <b>${input.editorialScore}%</b> on the Patrika editorial checklist (target ≥80%).`
+    : `Your article scored <b>${input.editorialScore}%</b> on the Patrika editorial checklist (target ≥80%).`;
+
+  const sign = input.forEditor
+    ? `— Patrika Editorial Insight`
+    : `Please review and refine when you can — Patrika Editorial Insight.`;
+
   return [
     `🔔 <b>Editorial review needed</b>`,
     "",
-    `Hi ${escape(input.authorName)},`,
+    greeting,
     "",
-    `Your article scored <b>${input.editorialScore}%</b> on the Patrika editorial checklist (target ≥80%).`,
+    scoreLine,
     "",
     `<b>Article:</b> ${escape(input.headline)}`,
     issues ? `\n<b>Top issues to fix:</b>\n${issues}` : "",
     "",
     `<a href="${escape(input.url)}">${escape(input.url)}</a>`,
     "",
-    `Please review and refine when you can — Patrika Editorial Insight.`,
+    sign,
   ]
     .filter(Boolean)
     .join("\n");
