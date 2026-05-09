@@ -283,6 +283,7 @@ async function run(req: Request) {
     //      free. If the API key is missing, this silently no-ops.
     let slugsAnalyzed = 0;
     let slugVerdictMap: Record<string, import("@/lib/types").SlugVerdict> = {};
+    let geminiError: string | null = null;
     if (successfulUrls.length > 0) {
       try {
         slugVerdictMap = await checkSlugsWithGemini(successfulUrls);
@@ -291,10 +292,8 @@ async function run(req: Request) {
         // Don't fail the whole cron run because Gemini hiccuped or the
         // key isn't set — articles are saved either way, the rule will
         // just show "no verdict yet" for those slugs until next tick.
-        console.warn(
-          "[cron] gemini slug analysis skipped:",
-          e instanceof Error ? e.message : String(e),
-        );
+        geminiError = e instanceof Error ? e.message : String(e);
+        console.warn("[cron] gemini slug analysis skipped:", geminiError);
       }
     }
 
@@ -396,7 +395,7 @@ async function run(req: Request) {
         finished_at: new Date().toISOString(),
         scraped,
         errors,
-        notes: `Cutoff ${cutoffUsed} · ${fresh.length} cand · ${slugsAnalyzed} slugs · ${usersCreated} authors · ${sectionsCreated} sections · ${nudgesSent}/${nudgesSent + nudgesSkipped} nudges · purged ${purgedArticles}a/${purgedSnapshots}s/${purgedRuns}r`,
+        notes: `Cutoff ${cutoffUsed} · ${fresh.length} cand · ${slugsAnalyzed} slugs${geminiError ? ` (gemini-err: ${geminiError.slice(0, 120)})` : ""} · ${usersCreated} authors · ${sectionsCreated} sections · ${nudgesSent}/${nudgesSent + nudgesSkipped} nudges · purged ${purgedArticles}a/${purgedSnapshots}s/${purgedRuns}r`,
       })
       .eq("id", runId);
 
@@ -407,6 +406,7 @@ async function run(req: Request) {
       candidates: fresh.length,
       scraped,
       slugsAnalyzed,
+      geminiError,
       usersCreated,
       sectionsCreated,
       nudgesSent,
