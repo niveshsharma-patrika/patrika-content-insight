@@ -1,65 +1,168 @@
-import Image from "next/image";
+import {
+  getCachedDashboardStats,
+  getPaginatedDashboard,
+} from "@/lib/analyze";
+import { ComplianceSection } from "@/components/ComplianceSection";
+import { DatePicker } from "@/components/DatePicker";
+import { categoryFromUrl, formatRelative } from "@/lib/utils";
+import { readCachedSlugVerdicts } from "@/lib/gemini";
+import { findUsersForBylines, type User } from "@/lib/users";
+import { clampDateToWindow, dayHeaderLabel, todayInIST } from "@/lib/dates";
 
-export default function Home() {
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
+const PER_PAGE = 24;
+const RETENTION_DAYS = 7;
+
+type SearchParams = Promise<{
+  page?: string;
+  date?: string;
+}>;
+
+export default async function Page({
+  searchParams,
+}: {
+  searchParams: SearchParams;
+}) {
+  const sp = await searchParams;
+  const page = Math.max(1, parseInt(sp.page ?? "1", 10) || 1);
+  // Clamp to retention window — bookmarked or hand-typed out-of-range
+  // dates fall back to today.
+  const istDate = clampDateToWindow(sp.date, RETENTION_DAYS);
+  const isToday = istDate === todayInIST();
+
+  // Pure DB read. The cron is the only thing that touches the live
+  // sitemap; the dashboard reads articles + the daily snapshot row.
+  const dashboard = await getPaginatedDashboard({
+    page,
+    perPage: PER_PAGE,
+    date: istDate,
+  });
+
+  // Aggregate stats across all of the chosen day's stored articles, for
+  // the Top Issues panel. Same DB-only data source.
+  const cachedStats = await getCachedDashboardStats({ date: istDate });
+  const summary = cachedStats ?? dashboard.summary;
+
+  const slugVerdicts = await readCachedSlugVerdicts(
+    dashboard.summary.articles.map((a) => a.sitemap.url),
+  );
+  const matchedUsers = await findUsersForBylines(
+    dashboard.summary.articles.map((a) => a.article.author),
+  );
+  const userMap: Record<string, User | null> = {};
+  dashboard.summary.articles.forEach((a, i) => {
+    userMap[a.sitemap.url] = matchedUsers[i];
+  });
+
+  const allCategories = Array.from(
+    new Set(
+      dashboard.summary.articles.map((a) => categoryFromUrl(a.sitemap.url)),
+    ),
+  ).sort();
+
+  const sitemapTotal = dashboard.totalEntries;
+  const lastTickRel = dashboard.lastCronTickAt
+    ? formatRelative(dashboard.lastCronTickAt)
+    : null;
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
+    <div className="mx-auto max-w-7xl px-6 py-8 space-y-8">
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div className="min-w-0 space-y-3">
+          <h1 className="text-2xl font-semibold tracking-tight">
+            {dayHeaderLabel(istDate)}
+            {!isToday ? (
+              <span className="ml-2 text-xs font-normal text-muted">
+                (archive)
+              </span>
+            ) : null}
           </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+          <DatePicker activeDate={istDate} />
+          <p className="text-sm text-muted">
+            <span className="font-mono tabular-nums">
+              {dashboard.cachedCount.toLocaleString()}
+            </span>
+            {sitemapTotal > dashboard.cachedCount ? (
+              <>
+                {" "}
+                of{" "}
+                <span className="font-mono tabular-nums">
+                  {sitemapTotal.toLocaleString()}
+                </span>
+              </>
+            ) : null}{" "}
+            articles scraped
+            {isToday ? " today" : ""}
+            {isToday ? (
+              <>
+                {" · "}
+                {lastTickRel ? (
+                  <span suppressHydrationWarning>
+                    last cron tick {lastTickRel}
+                  </span>
+                ) : (
+                  <span className="text-amber-700">no cron tick yet</span>
+                )}
+              </>
+            ) : null}
+            {dashboard.failedToFetch > 0 ? (
+              <>
+                {" · "}
+                <span className="text-red-700">
+                  {dashboard.failedToFetch} fetch failed
+                </span>
+              </>
+            ) : null}
           </p>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+      </div>
+
+      {/* === ISSUES + ARTICLES === */}
+      {dashboard.cachedCount === 0 ? (
+        <div className="rounded-xl border bg-card p-12 text-center space-y-3">
+          <p className="text-sm font-medium">
+            {isToday
+              ? "Nothing scraped yet for today."
+              : `No articles archived for ${dayHeaderLabel(istDate)}.`}
+          </p>
+          <p className="text-sm text-muted max-w-md mx-auto">
+            {isToday ? (
+              <>
+                The hourly cron is the only thing that fetches new
+                articles and updates this page. It runs on the hour,
+                every hour, in production. Until it ticks, this view
+                stays empty.
+              </>
+            ) : (
+              <>
+                Either the cron wasn&apos;t running on that day, or the
+                articles have already been purged (we keep the last{" "}
+                {RETENTION_DAYS} days).
+              </>
+            )}
+          </p>
+          {isToday && sitemapTotal > 0 ? (
+            <p className="text-xs text-muted">
+              {sitemapTotal.toLocaleString()} articles in the most recent
+              snapshot.
+            </p>
+          ) : null}
         </div>
-      </main>
+      ) : (
+        <ComplianceSection
+          summary={summary}
+          pageArticles={dashboard.summary.articles}
+          allCategories={allCategories}
+          slugVerdicts={slugVerdicts}
+          userMap={userMap}
+          page={dashboard.page}
+          pageCount={dashboard.pageCount}
+          totalEntries={dashboard.totalEntries}
+          cachedCount={dashboard.cachedCount}
+        />
+      )}
     </div>
   );
 }
