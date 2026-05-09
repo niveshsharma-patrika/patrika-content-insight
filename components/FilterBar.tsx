@@ -17,7 +17,7 @@ export const DEFAULT_FILTERS: FilterState = {
   status: "all",
   scope: "all",
   sections: [],
-  sort: "score-asc",
+  sort: "recent",
 };
 
 const STATUS_OPTIONS: Array<{ id: Status; label: string }> = [
