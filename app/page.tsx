@@ -11,11 +11,10 @@ import { listEditors } from "@/lib/editors";
 import { listSections } from "@/lib/sections";
 import { clampDateToWindow, dayHeaderLabel, todayInIST } from "@/lib/dates";
 
-// Cache rendered output for 30s per URL (i.e. per ?date= / ?page= combo).
-// The cron only writes hourly so 30s of staleness is negligible, and
-// repeat visits within a session render in <50ms instead of re-running
-// every Supabase query.
-export const revalidate = 30;
+// No caching. Every page load re-queries Supabase so editors always
+// see the latest cron-tick state without any staleness window.
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 const PER_PAGE = 24;
 const RETENTION_DAYS = 7;
