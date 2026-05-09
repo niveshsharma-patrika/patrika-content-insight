@@ -21,8 +21,16 @@ export async function fetchSitemap(opts?: {
   ) {
     return sitemapCache.entries;
   }
+  // Always bypass Next.js's data cache. We had a 5-minute revalidate
+  // here, but Patrika's sitemap-publish cadence is faster than 5 min
+  // and we're already gating freshness via the in-memory `sitemapCache`
+  // above. With the revalidate cache in place, two cron ticks within
+  // 5 min would see an identical (stale) sitemap, so the second
+  // tick reports `scraped: 0` even when Patrika has dozens of new
+  // articles ready. `cache: "no-store"` makes every fetch hit
+  // patrika.com fresh.
   const res = await fetch(SITEMAP_URL, {
-    next: { revalidate: 300 },
+    cache: "no-store",
     headers: {
       "User-Agent":
         "PatrikaContentInsight/1.0 (editorial QA dashboard; contact ops)",
