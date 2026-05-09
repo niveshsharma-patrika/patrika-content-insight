@@ -26,6 +26,10 @@ type ArticleRow = {
   published_at: string | null;
   modified_at: string | null;
   og_image: string | null;
+  /** True the second time (or later) the cron scrapes this URL — i.e.
+   *  Patrika bumped its publish-timestamp and we picked it up again.
+   *  Drives the "Updated" tag on the dashboard. */
+  is_updated: boolean | null;
   payload: ScrapedArticle;
 };
 
@@ -50,6 +54,10 @@ export function rowToSitemapEntry(row: ArticleRow): SitemapEntry {
 export type StoredArticle = {
   entry: SitemapEntry;
   article: ScrapedArticle;
+  /** True if the cron has scraped this URL more than once — the second
+   *  scrape happens because Patrika bumped its publish-time, so this
+   *  flag means "Patrika edited / re-published this article". */
+  isUpdated: boolean;
 };
 
 function toScraped(row: ArticleRow): ScrapedArticle {
@@ -90,6 +98,17 @@ export async function writeArticle(
   if (!db) return;
   const intro = article.paragraphs?.[0]?.text ?? "";
   void intro; // reserved for future fts/snippet use
+
+  // If a row already exists for this URL, this is a re-scrape — the
+  // cron picked it up again because Patrika bumped published_at.
+  // Tag it as updated so the dashboard surfaces the change.
+  const { data: existingRow } = await db
+    .from("articles")
+    .select("scraped_at")
+    .eq("url", url)
+    .maybeSingle();
+  const isUpdate = existingRow !== null;
+
   const row: Omit<ArticleRow, "scraped_at"> & { scraped_at?: string } = {
     url,
     article_id: computeArticleId(url),
@@ -117,6 +136,7 @@ export async function writeArticle(
       parseIso(article.publishedAt) ?? parseIso(sitemapMeta?.publishedAt),
     modified_at: parseIso(article.modifiedAt),
     og_image: article.ogImage ?? null,
+    is_updated: isUpdate,
     payload: article,
     scraped_at: new Date().toISOString(),
   };
@@ -242,6 +262,7 @@ export async function readArticlesForIstDate(
   return (data as ArticleRow[]).map((row) => ({
     entry: rowToSitemapEntry(row),
     article: row.payload,
+    isUpdated: row.is_updated ?? false,
   }));
 }
 
@@ -261,7 +282,11 @@ export async function readArticleById(
     .maybeSingle();
   if (error || !data) return null;
   const row = data as ArticleRow;
-  return { entry: rowToSitemapEntry(row), article: row.payload };
+  return {
+    entry: rowToSitemapEntry(row),
+    article: row.payload,
+    isUpdated: row.is_updated ?? false,
+  };
 }
 
 /**

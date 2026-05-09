@@ -31,6 +31,7 @@ function buildAnalysis(
   entry: SitemapEntry,
   article: ScrapedArticle,
   slugVerdict?: SlugVerdict,
+  isUpdated: boolean = false,
 ): ArticleAnalysis {
   if (article.ok && slugVerdict) {
     article.slugVerdict = slugVerdict;
@@ -93,6 +94,7 @@ function buildAnalysis(
     editorialScore,
     seoScore,
     topIssue,
+    isUpdated,
   };
 }
 
@@ -107,7 +109,12 @@ export async function getArticleAnalysisById(
   const stored = await readArticleById(id);
   if (!stored) return null;
   const verdicts = await readCachedSlugVerdicts([stored.entry.url]);
-  return buildAnalysis(stored.entry, stored.article, verdicts[stored.entry.url]);
+  return buildAnalysis(
+    stored.entry,
+    stored.article,
+    verdicts[stored.entry.url],
+    stored.isUpdated,
+  );
 }
 
 /**
@@ -159,7 +166,7 @@ export async function getPaginatedDashboard(opts?: {
     visible.map((s) => s.entry.url),
   );
   const analyses = visible.map((s) =>
-    buildAnalysis(s.entry, s.article, slugVerdicts[s.entry.url]),
+    buildAnalysis(s.entry, s.article, slugVerdicts[s.entry.url], s.isUpdated),
   );
   const summary = buildSummary(analyses);
 
@@ -196,7 +203,7 @@ export async function getCachedDashboardStats(opts?: {
   const analyses = stored
     .filter((s) => s.article.ok)
     .map((s) =>
-      buildAnalysis(s.entry, s.article, slugVerdicts[s.entry.url]),
+      buildAnalysis(s.entry, s.article, slugVerdicts[s.entry.url], s.isUpdated),
     );
   return buildSummary(analyses);
 }

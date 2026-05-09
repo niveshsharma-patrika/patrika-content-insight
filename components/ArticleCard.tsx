@@ -52,6 +52,14 @@ export function ArticleCard({
         <span suppressHydrationWarning>
           {formatRelative(a.sitemap.publishedAt)}
         </span>
+        {a.isUpdated ? (
+          <span
+            className="inline-flex items-center rounded-full bg-amber-100 text-amber-800 ring-1 ring-inset ring-amber-200 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide"
+            title="Patrika bumped this article's publish-time — re-scraped by the cron"
+          >
+            Updated
+          </span>
+        ) : null}
         <span className="ml-auto flex items-center gap-1.5">
           {!ok ? (
             <Badge variant="error">fetch failed</Badge>

@@ -169,6 +169,9 @@ export type ArticleAnalysis = {
     severity: Severity;
     message?: string;
   };
+  /** True if the cron has scraped this URL more than once — Patrika
+   *  bumped its publish-time, indicating an edit / re-publish. */
+  isUpdated?: boolean;
 };
 
 export type DashboardSummary = {

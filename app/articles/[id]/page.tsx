@@ -48,12 +48,20 @@ export default async function ArticlePage({ params }: { params: Params }) {
       </div>
 
       <header className="rounded-xl border bg-card p-6 space-y-3">
-        <div className="flex items-center gap-2 text-xs text-muted">
+        <div className="flex items-center gap-2 text-xs text-muted flex-wrap">
           <span className="capitalize">{categoryFromUrl(a.sitemap.url)}</span>
           <span>·</span>
           <span suppressHydrationWarning>
             {formatRelative(a.sitemap.publishedAt)}
           </span>
+          {a.isUpdated ? (
+            <span
+              className="inline-flex items-center rounded-full bg-amber-100 text-amber-800 ring-1 ring-inset ring-amber-200 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide"
+              title="Patrika bumped this article's publish-time — re-scraped by the cron"
+            >
+              Updated
+            </span>
+          ) : null}
           {a.article.author ? (
             <>
               <span>·</span>

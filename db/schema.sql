@@ -34,6 +34,12 @@ CREATE TABLE IF NOT EXISTS articles (
 -- earlier version of this schema.
 ALTER TABLE articles ADD COLUMN IF NOT EXISTS article_id TEXT;
 
+-- True the second (or later) time we scrape the same URL — i.e. the
+-- cron's diff picked it up because Patrika bumped its publication
+-- timestamp. Surfaces in the dashboard as an "Updated" tag so editors
+-- can spot articles that were re-published / re-edited.
+ALTER TABLE articles ADD COLUMN IF NOT EXISTS is_updated BOOLEAN DEFAULT FALSE;
+
 CREATE INDEX IF NOT EXISTS idx_articles_published      ON articles(published_at DESC);
 CREATE INDEX IF NOT EXISTS idx_articles_category       ON articles(category);
 CREATE INDEX IF NOT EXISTS idx_articles_author         ON articles(author);
