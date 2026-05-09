@@ -4,9 +4,10 @@ import {
 } from "@/lib/analyze";
 import { ComplianceSection } from "@/components/ComplianceSection";
 import { DatePicker } from "@/components/DatePicker";
-import { categoryFromUrl, formatRelative } from "@/lib/utils";
+import { formatRelative } from "@/lib/utils";
 import { readCachedSlugVerdicts } from "@/lib/gemini";
 import { findUsersForBylines, type User } from "@/lib/users";
+import { listSections } from "@/lib/sections";
 import { clampDateToWindow, dayHeaderLabel, todayInIST } from "@/lib/dates";
 
 export const dynamic = "force-dynamic";
@@ -56,11 +57,14 @@ export default async function Page({
     userMap[a.sitemap.url] = matchedUsers[i];
   });
 
-  const allCategories = Array.from(
-    new Set(
-      dashboard.summary.articles.map((a) => categoryFromUrl(a.sitemap.url)),
-    ),
-  ).sort();
+  // Sections come from the DB now — auto-imported by the cron, edited
+  // in Settings. The dashboard shows every active section, not only
+  // those that happened to land on the visible page.
+  const sectionRows = await listSections({ activeOnly: true });
+  const allCategories = sectionRows.map((s) => ({
+    id: s.id,
+    label: s.displayName,
+  }));
 
   const sitemapTotal = dashboard.totalEntries;
   const lastTickRel = dashboard.lastCronTickAt

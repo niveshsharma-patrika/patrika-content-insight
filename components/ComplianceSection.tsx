@@ -9,6 +9,7 @@ import {
   DEFAULT_FILTERS,
   FilterBar,
   type FilterState,
+  type SectionOption,
 } from "./FilterBar";
 import type { ArticleAnalysis, DashboardSummary } from "@/lib/types";
 import type { SlugVerdict } from "@/lib/gemini";
@@ -30,7 +31,7 @@ export function ComplianceSection({
   summary: DashboardSummary;
   /** Just the visible page (24 articles by default). */
   pageArticles: ArticleAnalysis[];
-  allCategories: string[];
+  allCategories: SectionOption[];
   slugVerdicts?: Record<string, SlugVerdict>;
   userMap?: Record<string, User | null>;
   page: number;

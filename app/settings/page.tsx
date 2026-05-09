@@ -1,7 +1,9 @@
 import Link from "next/link";
 import { getConfig } from "@/lib/config";
 import { UserManager } from "@/components/UserManager";
+import { SectionManager } from "@/components/SectionManager";
 import { listUsers } from "@/lib/users";
+import { listSections } from "@/lib/sections";
 import { rules } from "@/lib/rules";
 
 export const dynamic = "force-dynamic";
@@ -9,6 +11,7 @@ export const dynamic = "force-dynamic";
 export default async function SettingsPage() {
   const cfg = await getConfig();
   const users = await listUsers();
+  const sections = await listSections();
 
   const editorialCount = rules.filter((r) => r.scope === "editorial").length;
   const seoCount = rules.filter((r) => r.scope === "seo").length;
@@ -42,6 +45,8 @@ export default async function SettingsPage() {
         initialUsers={users}
         telegramConfigured={!!cfg.telegramBotToken}
       />
+
+      <SectionManager initialSections={sections} />
 
       <section className="rounded-xl border bg-card p-5 space-y-2">
         <div className="flex items-baseline justify-between gap-3 flex-wrap">

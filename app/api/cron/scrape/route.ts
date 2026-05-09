@@ -10,6 +10,7 @@ import {
 import { getDb } from "@/lib/db";
 import { checkSlugsWithGemini } from "@/lib/gemini";
 import { ensureUsersForBylines, findUsersForBylines } from "@/lib/users";
+import { ensureSectionsForUrls } from "@/lib/sections";
 import { runRules } from "@/lib/rules";
 import { buildAuthorAlert, sendTelegramMessage } from "@/lib/telegram";
 import { getConfig } from "@/lib/config";
@@ -242,6 +243,23 @@ async function run(req: Request) {
 
     const successfulUrls = successfulScrapes.map((s) => s.url);
 
+    // ---- Auto-import sections from URLs.
+    //      Each article's url-slug first segment becomes a row in
+    //      `sections` (title-cased display name). Re-runs are cheap —
+    //      known ids just get last_seen_at bumped.
+    let sectionsCreated = 0;
+    if (successfulUrls.length > 0) {
+      try {
+        const r = await ensureSectionsForUrls(successfulUrls);
+        sectionsCreated = r.created;
+      } catch (e) {
+        console.warn(
+          "[cron] section auto-import skipped:",
+          e instanceof Error ? e.message : String(e),
+        );
+      }
+    }
+
     // ---- Auto-import authors from bylines.
     //      Anyone we've never seen before becomes a new app_users row
     //      with the byline as their name + only alias. The editor then
@@ -378,7 +396,7 @@ async function run(req: Request) {
         finished_at: new Date().toISOString(),
         scraped,
         errors,
-        notes: `Cutoff ${cutoffUsed} · ${fresh.length} cand · ${slugsAnalyzed} slugs · ${usersCreated} authors · ${nudgesSent}/${nudgesSent + nudgesSkipped} nudges · purged ${purgedArticles}a/${purgedSnapshots}s/${purgedRuns}r`,
+        notes: `Cutoff ${cutoffUsed} · ${fresh.length} cand · ${slugsAnalyzed} slugs · ${usersCreated} authors · ${sectionsCreated} sections · ${nudgesSent}/${nudgesSent + nudgesSkipped} nudges · purged ${purgedArticles}a/${purgedSnapshots}s/${purgedRuns}r`,
       })
       .eq("id", runId);
 
@@ -390,6 +408,7 @@ async function run(req: Request) {
       scraped,
       slugsAnalyzed,
       usersCreated,
+      sectionsCreated,
       nudgesSent,
       nudgesSkipped,
       errors,

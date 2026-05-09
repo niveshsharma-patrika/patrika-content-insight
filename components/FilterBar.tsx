@@ -41,6 +41,8 @@ const SORT_OPTIONS: Array<{ id: Sort; label: string }> = [
   { id: "issues-desc", label: "Most issues first" },
 ];
 
+export type SectionOption = { id: string; label: string };
+
 export function FilterBar({
   state,
   setState,
@@ -51,9 +53,12 @@ export function FilterBar({
   state: FilterState;
   setState: (s: FilterState) => void;
   totalOnPage: number;
-  allCategories: string[];
+  /** Sections to show in the picker. Pass display labels — the multi-
+   *  select keys & filter state still use raw ids under the hood. */
+  allCategories: SectionOption[];
   resultCount: number;
 }) {
+  const labelById = new Map(allCategories.map((s) => [s.id, s.label]));
   const set = <K extends keyof FilterState>(k: K, v: FilterState[K]) =>
     setState({ ...state, [k]: v });
 
@@ -109,7 +114,9 @@ export function FilterBar({
             selected={state.sections}
             onToggle={toggleSection}
             onClear={() => set("sections", [])}
-            onSelectAll={() => set("sections", [...allCategories])}
+            onSelectAll={() =>
+              set("sections", allCategories.map((s) => s.id))
+            }
           />
         </Field>
 
@@ -162,7 +169,7 @@ export function FilterBar({
         {state.sections.map((s) => (
           <ActiveChip
             key={`sec-${s}`}
-            label={s}
+            label={labelById.get(s) ?? s}
             onClear={() => toggleSection(s)}
           />
         ))}
@@ -200,9 +207,9 @@ function SectionsMultiSelect({
   onClear,
   onSelectAll,
 }: {
-  options: string[];
+  options: SectionOption[];
   selected: string[];
-  onToggle: (s: string) => void;
+  onToggle: (id: string) => void;
   onClear: () => void;
   onSelectAll: () => void;
 }) {
@@ -231,13 +238,16 @@ function SectionsMultiSelect({
     selected.length === 0
       ? "All sections"
       : selected.length === 1
-        ? selected[0]
+        ? options.find((o) => o.id === selected[0])?.label ?? selected[0]
         : `${selected.length} sections`;
 
   const filtered = query.trim()
-    ? options.filter((o) =>
-        o.toLowerCase().includes(query.trim().toLowerCase()),
-      )
+    ? options.filter((o) => {
+        const q = query.trim().toLowerCase();
+        return (
+          o.label.toLowerCase().includes(q) || o.id.toLowerCase().includes(q)
+        );
+      })
     : options;
 
   return (
@@ -317,15 +327,15 @@ function SectionsMultiSelect({
                 No sections match.
               </li>
             ) : (
-              filtered.map((s) => {
-                const checked = selected.includes(s);
+              filtered.map((opt) => {
+                const checked = selected.includes(opt.id);
                 return (
-                  <li key={s}>
+                  <li key={opt.id}>
                     <button
                       type="button"
                       role="option"
                       aria-selected={checked}
-                      onClick={() => onToggle(s)}
+                      onClick={() => onToggle(opt.id)}
                       className={`w-full flex items-center gap-2.5 px-3 py-1.5 text-sm text-left hover:bg-stone-50 ${
                         checked ? "bg-stone-50/60" : ""
                       }`}
@@ -355,7 +365,7 @@ function SectionsMultiSelect({
                           </svg>
                         ) : null}
                       </span>
-                      <span className="truncate">{s}</span>
+                      <span className="truncate">{opt.label}</span>
                     </button>
                   </li>
                 );

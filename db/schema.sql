@@ -88,6 +88,30 @@ CREATE TABLE IF NOT EXISTS slug_verdicts (
 );
 
 -- =========================================================================
+-- 4b. Sections / categories
+--     Auto-imported from each article's URL slug (the leading path
+--     segment, e.g. `jaipur-news`). The cron upserts every section it
+--     encounters; the editor renames or deactivates them in Settings.
+-- =========================================================================
+CREATE TABLE IF NOT EXISTS sections (
+  id              TEXT PRIMARY KEY,        -- url slug, e.g. "jaipur-news"
+  display_name    TEXT NOT NULL,           -- human label, e.g. "Jaipur"
+  active          BOOLEAN DEFAULT TRUE,
+  first_seen_at   TIMESTAMPTZ DEFAULT NOW(),
+  last_seen_at    TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_sections_active ON sections(active);
+
+-- Bootstrap: seed sections from any articles already in the table on
+-- first run of this migration. Idempotent: ON CONFLICT skips dupes.
+INSERT INTO sections (id, display_name)
+SELECT DISTINCT category, INITCAP(REPLACE(category, '-', ' '))
+FROM articles
+WHERE category IS NOT NULL
+ON CONFLICT (id) DO NOTHING;
+
+-- =========================================================================
 -- 5. Authors (replaces .data/users.json)
 --    Named app_users to avoid colliding with Supabase's `users` if used.
 -- =========================================================================
@@ -145,6 +169,7 @@ ALTER TABLE articles         ENABLE ROW LEVEL SECURITY;
 ALTER TABLE article_scores   ENABLE ROW LEVEL SECURITY;
 ALTER TABLE rule_results     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE slug_verdicts    ENABLE ROW LEVEL SECURITY;
+ALTER TABLE sections         ENABLE ROW LEVEL SECURITY;
 ALTER TABLE app_users        ENABLE ROW LEVEL SECURITY;
 ALTER TABLE cron_runs        ENABLE ROW LEVEL SECURITY;
 ALTER TABLE daily_snapshots  ENABLE ROW LEVEL SECURITY;
