@@ -1,6 +1,6 @@
 import {
   getCachedDashboardStats,
-  getPaginatedDashboard,
+  getHourDashboard,
 } from "@/lib/analyze";
 import { ComplianceSection } from "@/components/ComplianceSection";
 import { DatePicker } from "@/components/DatePicker";
@@ -16,11 +16,12 @@ import { clampDateToWindow, dayHeaderLabel, todayInIST } from "@/lib/dates";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-const PER_PAGE = 24;
 const RETENTION_DAYS = 7;
 
 type SearchParams = Promise<{
-  page?: string;
+  /** 0–23 IST hour. If absent, server auto-picks the latest hour
+   *  with articles. Replaces the old ?page= scheme. */
+  hour?: string;
   date?: string;
 }>;
 
@@ -30,22 +31,27 @@ export default async function Page({
   searchParams: SearchParams;
 }) {
   const sp = await searchParams;
-  const page = Math.max(1, parseInt(sp.page ?? "1", 10) || 1);
   // Clamp to retention window — bookmarked or hand-typed out-of-range
   // dates fall back to today.
   const istDate = clampDateToWindow(sp.date, RETENTION_DAYS);
   const isToday = istDate === todayInIST();
 
-  // Pure DB read. The cron is the only thing that touches the live
-  // sitemap; the dashboard reads articles + the daily snapshot row.
-  const dashboard = await getPaginatedDashboard({
-    page,
-    perPage: PER_PAGE,
+  // Parse the requested hour if present. Anything missing or invalid
+  // becomes `null` — the server will auto-pick the most recent hour
+  // that actually has articles.
+  let requestedHour: number | null = null;
+  if (typeof sp.hour === "string") {
+    const n = parseInt(sp.hour, 10);
+    if (Number.isFinite(n) && n >= 0 && n < 24) requestedHour = n;
+  }
+
+  const dashboard = await getHourDashboard({
     date: istDate,
+    requestedHour,
   });
 
   // Aggregate stats across all of the chosen day's stored articles, for
-  // the Top Issues panel. Same DB-only data source.
+  // the Top Issues panel. Independent of which hour is being viewed.
   const cachedStats = await getCachedDashboardStats({ date: istDate });
   const summary = cachedStats ?? dashboard.summary;
 
@@ -60,23 +66,17 @@ export default async function Page({
     userMap[a.sitemap.url] = matchedUsers[i];
   });
 
-  // Sections come from the DB now — auto-imported by the cron, edited
-  // in Settings. The dashboard shows every active section, not only
-  // those that happened to land on the visible page.
   const sectionRows = await listSections({ activeOnly: true });
   const allCategories = sectionRows.map((s) => ({
     id: s.id,
     label: s.displayName,
   }));
 
-  // Count active editors with chat IDs — drives the Notify button's
-  // "always actionable" behavior on cards even when an article's
-  // author has no chat ID.
   const editorCount = (await listEditors({ activeOnly: true })).filter(
     (e) => e.telegramChatId,
   ).length;
 
-  const sitemapTotal = dashboard.totalEntries;
+  const sitemapTotal = dashboard.sitemapTotalForDate;
   const lastTickRel = dashboard.lastCronTickAt
     ? formatRelative(dashboard.lastCronTickAt)
     : null;
@@ -96,9 +96,9 @@ export default async function Page({
           <DatePicker activeDate={istDate} />
           <p className="text-sm text-muted">
             <span className="font-mono tabular-nums">
-              {dashboard.cachedCount.toLocaleString()}
+              {dashboard.totalForDate.toLocaleString()}
             </span>
-            {sitemapTotal > dashboard.cachedCount ? (
+            {sitemapTotal > dashboard.totalForDate ? (
               <>
                 {" "}
                 of{" "}
@@ -134,7 +134,7 @@ export default async function Page({
       </div>
 
       {/* === ISSUES + ARTICLES === */}
-      {dashboard.cachedCount === 0 ? (
+      {dashboard.totalForDate === 0 ? (
         <div className="rounded-xl border bg-card p-12 text-center space-y-3">
           <p className="text-sm font-medium">
             {isToday
@@ -172,10 +172,9 @@ export default async function Page({
           slugVerdicts={slugVerdicts}
           userMap={userMap}
           editorCount={editorCount}
-          page={dashboard.page}
-          pageCount={dashboard.pageCount}
-          totalEntries={dashboard.totalEntries}
-          cachedCount={dashboard.cachedCount}
+          hour={dashboard.hour}
+          countsPerHour={dashboard.countsPerHour}
+          totalForDate={dashboard.totalForDate}
         />
       )}
     </div>

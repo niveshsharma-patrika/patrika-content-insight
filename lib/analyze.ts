@@ -4,9 +4,10 @@ import { rules, runRules } from "./rules";
 import { articleId } from "./articleId";
 import { readCachedSlugVerdicts } from "./gemini";
 import {
-  countArticlesForIstDate,
   readArticleById,
   readArticlesForIstDate,
+  readArticlesForIstHour,
+  readPublishedAtsForIstDate,
 } from "./articleStore";
 import { readDailySnapshot, readLastCronRun } from "./dashboardStats";
 import type {
@@ -122,73 +123,111 @@ export async function getArticleAnalysisById(
 }
 
 /**
- * Get a paginated view of today's articles for the dashboard.
- *
- * DB-only. The cron is the only thing that touches the sitemap; the
- * dashboard reads the rolled-up `daily_snapshots` row for the
- * Patrika-side published-today count, and the `articles` table itself
- * for the actual list.
- *
- * `totalEntries` reports Patrika's published-today count (from the
- * snapshot, may be null on a fresh install before the first cron tick).
- * `cachedCount` reports how many of those are scraped & in our DB.
+ * Bucket today's published_at timestamps into 24 IST hour bins. Used
+ * to populate the dashboard's hour-pagination strip — each bucket
+ * shows its article count and is clickable to jump to that hour.
  */
-export async function getPaginatedDashboard(opts?: {
-  page?: number;
-  perPage?: number;
-  /** YYYY-MM-DD (IST). Defaults to today. */
-  date?: string;
+function bucketIntoIstHours(timestamps: string[]): number[] {
+  const counts = new Array<number>(24).fill(0);
+  for (const ts of timestamps) {
+    const ms = new Date(ts).getTime();
+    if (!Number.isFinite(ms)) continue;
+    // Convert to IST by adding 5h30m, then read UTC hours of the
+    // shifted instant — that's the IST clock-hour.
+    const istHour = new Date(ms + 5.5 * 60 * 60 * 1000).getUTCHours();
+    if (istHour >= 0 && istHour < 24) counts[istHour] += 1;
+  }
+  return counts;
+}
+
+/**
+ * Get a single IST-hour's slice of articles for the dashboard, plus
+ * the per-hour counts for all 24 hours of the chosen IST date.
+ *
+ * Used by the home page. Replaces the old page-based pagination — the
+ * editor's mental model is "show me what was published 4-5 PM" rather
+ * than "show me page 2 of 11".
+ *
+ * `requestedHour` is an explicit user choice (from `?hour=N`). When
+ * null, we auto-pick the most recent hour with articles, falling
+ * back to hour 0 if the day is empty.
+ */
+export async function getHourDashboard(opts: {
+  /** YYYY-MM-DD IST. */
+  date: string;
+  /** 0-23 IST hour, or null to auto-pick. */
+  requestedHour: number | null;
 }): Promise<{
   summary: DashboardSummary;
-  totalEntries: number;
-  page: number;
-  perPage: number;
-  pageCount: number;
-  cachedCount: number;
+  istDate: string;
+  hour: number;
+  totalForDate: number;
+  totalForHour: number;
+  countsPerHour: number[];
+  sitemapTotalForDate: number;
   sitemapUrl: string;
   generatedAt: string;
   failedToFetch: number;
   lastCronTickAt: string | null;
   lastCronStatus: string | null;
-  istDate: string;
 }> {
-  const istDate = opts?.date ?? todayInIST();
-  const perPage = opts?.perPage ?? 24;
-  const page = Math.max(1, opts?.page ?? 1);
-  const offset = (page - 1) * perPage;
+  const istDate = opts.date;
 
-  // Four parallel queries instead of one big SELECT *. The page only
-  // needs the visible 24 articles, the count is cheap and indexed.
-  const [visible, totalForDate, snapshot, lastTick] = await Promise.all([
-    readArticlesForIstDate(istDate, { offset, limit: perPage }),
-    countArticlesForIstDate(istDate),
+  // Phase 1 — pull just the timestamps to compute counts and decide
+  // which hour we'll actually render. One small query, cheap.
+  const todayPubAts = await readPublishedAtsForIstDate(istDate);
+  const countsPerHour = bucketIntoIstHours(todayPubAts);
+  const totalForDate = todayPubAts.length;
+
+  // Decide which hour to render.
+  let hour: number;
+  if (
+    opts.requestedHour !== null &&
+    Number.isFinite(opts.requestedHour) &&
+    opts.requestedHour >= 0 &&
+    opts.requestedHour < 24
+  ) {
+    hour = Math.floor(opts.requestedHour);
+  } else {
+    // Auto-pick: latest hour that has at least one article.
+    let pick = -1;
+    for (let h = 23; h >= 0; h--) {
+      if (countsPerHour[h] > 0) {
+        pick = h;
+        break;
+      }
+    }
+    hour = pick >= 0 ? pick : 0;
+  }
+
+  // Phase 2 — parallel: hour articles + snapshot + last cron tick.
+  const [hourArticles, snapshot, lastTick] = await Promise.all([
+    readArticlesForIstHour(istDate, hour),
     readDailySnapshot(istDate),
     readLastCronRun(),
   ]);
 
-  const pageCount = Math.max(1, Math.ceil(totalForDate / perPage));
-
   const slugVerdicts = await readCachedSlugVerdicts(
-    visible.map((s) => s.entry.url),
+    hourArticles.map((s) => s.entry.url),
   );
-  const analyses = visible.map((s) =>
+  const analyses = hourArticles.map((s) =>
     buildAnalysis(s.entry, s.article, slugVerdicts[s.entry.url], s.isUpdated),
   );
   const summary = buildSummary(analyses);
 
   return {
     summary,
-    totalEntries: snapshot?.totalArticles ?? totalForDate,
-    page,
-    perPage,
-    pageCount,
-    cachedCount: totalForDate,
+    istDate,
+    hour,
+    totalForDate,
+    totalForHour: hourArticles.length,
+    countsPerHour,
+    sitemapTotalForDate: snapshot?.totalArticles ?? totalForDate,
     sitemapUrl: SITEMAP_URL,
     generatedAt: summary.generatedAt,
     failedToFetch: summary.failedToFetch,
     lastCronTickAt: lastTick?.finishedAt ?? lastTick?.startedAt ?? null,
     lastCronStatus: lastTick?.status ?? null,
-    istDate,
   };
 }
 

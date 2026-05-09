@@ -28,23 +28,24 @@ export function ComplianceSection({
   slugVerdicts = {},
   userMap = {},
   editorCount = 0,
-  page,
-  pageCount,
-  totalEntries,
-  cachedCount,
+  hour,
+  countsPerHour,
+  totalForDate,
 }: {
   /** Aggregate stats — used for Top Issues, By Category, KPIs. */
   summary: DashboardSummary;
-  /** Just the visible page (24 articles by default). */
+  /** Articles published in the chosen IST hour. */
   pageArticles: ArticleAnalysis[];
   allCategories: SectionOption[];
   editorCount?: number;
   slugVerdicts?: Record<string, SlugVerdict>;
   userMap?: Record<string, User | null>;
-  page: number;
-  pageCount: number;
-  totalEntries: number;
-  cachedCount: number;
+  /** 0–23 IST hour currently being viewed. */
+  hour: number;
+  /** Per-hour article counts for the date (length 24, index = hour). */
+  countsPerHour: number[];
+  /** Total articles for the day (across all hours). */
+  totalForDate: number;
 }) {
   const [filters, setFilters] = useState<FilterState>(DEFAULT_FILTERS);
   const [ruleFilter, setRuleFilter] = useState<{
@@ -156,8 +157,8 @@ export function ComplianceSection({
             </h2>
             <p className="text-xs text-muted mt-0.5">
               {summary.analyzed.toLocaleString()} of{" "}
-              {totalEntries.toLocaleString()} articles in the cache · click an
-              issue to filter the list below.
+              {totalForDate.toLocaleString()} articles for the day · click
+              an issue to filter the list below.
             </p>
           </div>
           <a
@@ -197,15 +198,17 @@ export function ComplianceSection({
         <div className="flex items-baseline justify-between gap-3 flex-wrap">
           <div>
             <h2 className="text-lg font-semibold tracking-tight">
-              Articles · page {page} of {pageCount}
+              Articles · {formatHourRange(hour)}
             </h2>
             <p className="text-xs text-muted mt-0.5">
-              Showing {pageArticles.length} of{" "}
-              {totalEntries.toLocaleString()} · {cachedCount.toLocaleString()}{" "}
-              scraped on disk
+              Showing {pageArticles.length} article
+              {pageArticles.length === 1 ? "" : "s"} published in this
+              hour · {totalForDate.toLocaleString()} total for the day
             </p>
           </div>
         </div>
+
+        <HourStrip activeHour={hour} countsPerHour={countsPerHour} />
 
         <FilterBar
           state={filters}
@@ -257,37 +260,50 @@ export function ComplianceSection({
           </div>
         )}
 
-        <Pagination page={page} pageCount={pageCount} />
       </section>
     </div>
   );
 }
 
-// ---------- Pagination ----------
+/* ---------------- Hour pagination ---------------- */
 
-function Pagination({
-  page,
-  pageCount,
+function formatHourRange(hour: number): string {
+  return `${formatIstHour(hour)} – ${formatIstHour((hour + 1) % 24)}`;
+}
+
+function formatIstHour(hour: number): string {
+  if (hour === 0) return "12:00 AM";
+  if (hour === 12) return "12:00 PM";
+  return hour < 12 ? `${hour}:00 AM` : `${hour - 12}:00 PM`;
+}
+
+function shortHourLabel(hour: number): string {
+  if (hour === 0) return "12am";
+  if (hour === 12) return "12pm";
+  return hour < 12 ? `${hour}am` : `${hour - 12}pm`;
+}
+
+function HourStrip({
+  activeHour,
+  countsPerHour,
 }: {
-  page: number;
-  pageCount: number;
+  activeHour: number;
+  countsPerHour: number[];
 }) {
-  // Wraps router.push() so React tells us when the next page is still
-  // loading on the server. Without this, clicking Next looked frozen
-  // until the new render arrived — Next.js doesn't auto-show a loader
-  // for `?page=` query-string navigations the way it does for path
-  // navigations.
+  // useTransition so the user sees feedback while the next hour's
+  // server render is in flight. Same approach as the old page-based
+  // Pagination but applied per-hour-button.
   const router = useRouter();
   const params = useSearchParams();
   const [pending, startTransition] = useTransition();
+  const [pendingHour, setPendingHour] = useState<number | null>(null);
 
-  function go(p: number) {
+  function go(h: number) {
+    setPendingHour(h);
     const merged = new URLSearchParams(params?.toString() ?? "");
-    merged.set("page", String(p));
+    merged.set("hour", String(h));
     startTransition(() => {
       router.push(`/?${merged.toString()}`, { scroll: false });
-      // also auto-scroll to the top of the article grid so the user sees
-      // their click registered
       setTimeout(() => {
         document
           .getElementById("articles-anchor")
@@ -296,102 +312,53 @@ function Pagination({
     });
   }
 
-  if (pageCount <= 1) return null;
-
-  // Build a compact page list: first, last, current ±2, ellipses elsewhere.
-  const items: Array<number | "ellipsis"> = [];
-  const window = 2;
-  const include = new Set<number>([1, pageCount]);
-  for (let i = page - window; i <= page + window; i++) {
-    if (i >= 1 && i <= pageCount) include.add(i);
-  }
-  let prev = 0;
-  for (const i of [...include].sort((a, b) => a - b)) {
-    if (prev && i - prev > 1) items.push("ellipsis");
-    items.push(i);
-    prev = i;
-  }
-
   return (
     <nav
-      aria-label="Pagination"
-      className={`flex items-center justify-center gap-1 pt-2 flex-wrap ${
-        pending ? "opacity-60 pointer-events-none" : ""
+      aria-label="Pick an hour"
+      className={`grid grid-cols-6 sm:grid-cols-8 lg:grid-cols-12 gap-1.5 ${
+        pending ? "opacity-70" : ""
       }`}
       aria-busy={pending}
     >
-      <PageBtn
-        disabled={page <= 1 || pending}
-        onClick={() => go(page - 1)}
-        label="‹ Prev"
-      />
-      {items.map((it, i) =>
-        it === "ellipsis" ? (
-          <span key={`e-${i}`} className="px-1.5 text-muted">
-            …
-          </span>
-        ) : (
-          <PageBtn
-            key={it}
-            label={String(it)}
-            active={it === page}
+      {Array.from({ length: 24 }, (_, h) => {
+        const count = countsPerHour[h] ?? 0;
+        const isActive = h === activeHour;
+        const isPending = pending && pendingHour === h;
+        const isEmpty = count === 0;
+        return (
+          <button
+            key={h}
+            type="button"
             disabled={pending}
-            pending={pending && it !== page}
-            onClick={() => go(it)}
-          />
-        ),
-      )}
-      <PageBtn
-        disabled={page >= pageCount || pending}
-        onClick={() => go(page + 1)}
-        label="Next ›"
-      />
-      {pending ? (
-        <span
-          className="text-xs text-muted ml-2 inline-flex items-center gap-1.5"
-          aria-live="polite"
-        >
-          <span className="size-1.5 rounded-full bg-amber-500 animate-pulse" />
-          loading…
-        </span>
-      ) : null}
+            aria-current={isActive ? "page" : undefined}
+            onClick={() => go(h)}
+            className={
+              isActive
+                ? "rounded-md bg-foreground text-background px-2 py-1.5 text-xs font-medium tabular-nums"
+                : isPending
+                  ? "rounded-md border bg-stone-100 text-muted px-2 py-1.5 text-xs tabular-nums"
+                  : isEmpty
+                    ? "rounded-md border bg-card text-muted-foreground/60 px-2 py-1.5 text-xs tabular-nums hover:bg-stone-50"
+                    : "rounded-md border bg-card hover:bg-stone-50 px-2 py-1.5 text-xs text-foreground tabular-nums"
+            }
+            title={`${formatHourRange(h)} · ${count} article${count === 1 ? "" : "s"}`}
+          >
+            <span className="block leading-none">{shortHourLabel(h)}</span>
+            <span
+              className={`block text-[10px] mt-0.5 leading-none ${
+                isActive
+                  ? "opacity-80"
+                  : isEmpty
+                    ? "text-muted-foreground/60"
+                    : "text-muted"
+              }`}
+            >
+              {count}
+            </span>
+          </button>
+        );
+      })}
     </nav>
   );
 }
 
-function PageBtn({
-  label,
-  active = false,
-  disabled = false,
-  pending = false,
-  onClick,
-}: {
-  label: string;
-  active?: boolean;
-  disabled?: boolean;
-  pending?: boolean;
-  onClick: () => void;
-}) {
-  if (disabled) {
-    return (
-      <span className="px-2.5 py-1 text-sm text-muted-foreground select-none">
-        {label}
-      </span>
-    );
-  }
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`px-2.5 py-1 rounded-md text-sm tabular-nums transition ${
-        active
-          ? "bg-foreground text-background"
-          : pending
-            ? "border bg-stone-100 text-muted"
-            : "border bg-card hover:bg-stone-50"
-      }`}
-    >
-      {label}
-    </button>
-  );
-}

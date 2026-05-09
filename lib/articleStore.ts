@@ -311,6 +311,63 @@ export async function readArticlesForIstDate(
 }
 
 /**
+ * Read articles whose published_at falls inside a specific IST hour
+ * (`istHour:00:00 → istHour+1:00:00`). The dashboard's hour-pagination
+ * uses this to show one bucket at a time.
+ */
+export async function readArticlesForIstHour(
+  istDate: string,
+  istHour: number,
+): Promise<StoredArticle[]> {
+  const db = getDb();
+  if (!db) return [];
+  const hh = String(Math.max(0, Math.min(23, istHour))).padStart(2, "0");
+  const startIso = `${istDate}T${hh}:00:00+05:30`;
+  // End of bucket = start + 1 hour. We compute it as ms-add so that
+  // the 23:00 bucket correctly spans midnight into the next IST date.
+  const endIso = new Date(
+    new Date(startIso).getTime() + 60 * 60 * 1000,
+  ).toISOString();
+  const { data, error } = await db
+    .from("articles")
+    .select("*")
+    .gte("published_at", startIso)
+    .lt("published_at", endIso)
+    .order("published_at", { ascending: false });
+  if (error || !data) return [];
+  return (data as ArticleRow[]).map((row) => ({
+    entry: rowToSitemapEntry(row),
+    article: row.payload,
+    isUpdated: row.is_updated ?? false,
+  }));
+}
+
+/**
+ * Read JUST the published_at timestamps for the day, no payloads. Used
+ * by the dashboard to compute per-hour counts for the pagination strip
+ * without paying the cost of every article's full ScrapedArticle JSON.
+ */
+export async function readPublishedAtsForIstDate(
+  istDate: string,
+): Promise<string[]> {
+  const db = getDb();
+  if (!db) return [];
+  const startIso = `${istDate}T00:00:00+05:30`;
+  const endIso = new Date(
+    new Date(startIso).getTime() + 24 * 60 * 60 * 1000,
+  ).toISOString();
+  const { data, error } = await db
+    .from("articles")
+    .select("published_at")
+    .gte("published_at", startIso)
+    .lt("published_at", endIso);
+  if (error || !data) return [];
+  return ((data as { published_at: string | null }[]) ?? [])
+    .map((r) => r.published_at)
+    .filter((s): s is string => !!s);
+}
+
+/**
  * Count articles in the IST date window without pulling row payloads.
  * Used by the dashboard for the "X scraped today" header and to compute
  * `pageCount` without reading all rows.
