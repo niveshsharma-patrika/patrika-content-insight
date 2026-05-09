@@ -198,6 +198,10 @@ export async function checkSlugsWithGemini(
     const parsed = parseJsonArray(text);
     if (!parsed) continue;
 
+    // Collect this batch's verdicts, then persist before moving on.
+    // If a later batch's API call throws (e.g. a 429 mid-stream), we
+    // keep what we already learned rather than discarding everything.
+    const batchVerdicts: SlugVerdict[] = [];
     for (let j = 0; j < chunk.length; j++) {
       const { url, slug } = chunk[j];
       const raw = parsed[j];
@@ -212,10 +216,21 @@ export async function checkSlugsWithGemini(
       };
       out[url] = verdict;
       fresh.push(verdict);
+      batchVerdicts.push(verdict);
+    }
+
+    if (batchVerdicts.length > 0) {
+      try {
+        await writeSlugVerdicts(batchVerdicts);
+      } catch (e) {
+        console.warn(
+          "[gemini.checkSlugsWithGemini] per-batch persist failed:",
+          e instanceof Error ? e.message : String(e),
+        );
+      }
     }
   }
 
-  await writeSlugVerdicts(fresh);
   return out;
 }
 

@@ -254,9 +254,19 @@ export function ComplianceSection({
 
         {filtered.length === 0 ? (
           <div className="rounded-xl border bg-card p-12 text-center text-sm text-muted">
-            {ruleFilter
-              ? "No articles on this page fail this rule. Try another page."
-              : "No articles on this page match these filters."}
+            {ruleFilter ? (
+              "No articles in this hour fail this rule. Try another hour."
+            ) : pageArticles.length === 0 ? (
+              <>
+                Nothing was published in{" "}
+                <span className="font-medium text-foreground">
+                  {formatHourRange(hour)}
+                </span>{" "}
+                IST. Pick a different hour above.
+              </>
+            ) : (
+              "No articles in this hour match these filters."
+            )}
           </div>
         ) : (
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
@@ -338,11 +348,16 @@ function HourStrip({
         const isActive = h === activeHour;
         const isPending = pending && pendingHour === h;
         const isEmpty = count === 0;
+        // Empty-hour buttons can't show anything useful — disable
+        // them so editors don't click into a known-blank view. The
+        // active button stays clickable so users can still see they
+        // are on it.
+        const disabled = pending || (isEmpty && !isActive);
         return (
           <button
             key={h}
             type="button"
-            disabled={pending}
+            disabled={disabled}
             aria-current={isActive ? "page" : undefined}
             onClick={() => go(h)}
             className={

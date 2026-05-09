@@ -243,18 +243,36 @@ export async function purgeArticlesOlderThan(
   const db = getDb();
   if (!db) return 0;
   const cutoffIso = `${cutoffIstDate}T00:00:00+05:30`;
-  const { error, count } = await db
+
+  // 1) Normal case: published_at is set → purge by it.
+  const r1 = await db
     .from("articles")
     .delete({ count: "exact" })
     .lt("published_at", cutoffIso);
-  if (error) {
+  if (r1.error) {
     console.error(
-      "[articleStore.purgeArticlesOlderThan] failed:",
-      error.message,
+      "[articleStore.purgeArticlesOlderThan] published_at delete failed:",
+      r1.error.message,
     );
-    return 0;
   }
-  return count ?? 0;
+
+  // 2) Orphan rows whose published_at is NULL never trip the `<` filter
+  //    above (Postgres null-comparison is UNKNOWN). Catch them via
+  //    scraped_at, which is NOT NULL on every row. Without this they
+  //    accumulate forever and break the 7-day retention promise.
+  const r2 = await db
+    .from("articles")
+    .delete({ count: "exact" })
+    .is("published_at", null)
+    .lt("scraped_at", cutoffIso);
+  if (r2.error) {
+    console.error(
+      "[articleStore.purgeArticlesOlderThan] null published_at fallback failed:",
+      r2.error.message,
+    );
+  }
+
+  return (r1.count ?? 0) + (r2.count ?? 0);
 }
 
 /**

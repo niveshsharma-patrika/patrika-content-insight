@@ -116,6 +116,23 @@ export async function scrapeArticle(url: string): Promise<ScrapedArticle> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   const fetchedAt = new Date().toISOString();
+  // Hostname allowlist. The cron only ever scrapes URLs that came from
+  // Patrika's sitemap, but we don't want a future caller (or a poisoned
+  // sitemap entry) coaxing this function into fetching arbitrary
+  // hosts — including Vercel/Supabase internal IPs or cloud-metadata
+  // endpoints. Hard-fail anything that isn't HTTPS Patrika.
+  try {
+    const u = new URL(url);
+    if (u.protocol !== "https:" || !u.hostname.endsWith("patrika.com")) {
+      return makeError(
+        url,
+        fetchedAt,
+        `URL host not allowed (must be https://*.patrika.com): ${u.protocol}//${u.hostname}`,
+      );
+    }
+  } catch {
+    return makeError(url, fetchedAt, "Malformed URL");
+  }
   try {
     const res = await fetch(url, {
       signal: controller.signal,

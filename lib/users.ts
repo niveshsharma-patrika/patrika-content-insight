@@ -60,6 +60,25 @@ export type UpsertUserInput = {
   notes?: string;
 };
 
+/**
+ * Telegram chat IDs must be numeric (positive for users, negative for
+ * groups). Anything else — @usernames, phone numbers, whitespace —
+ * fails the bot's sendMessage. Same regex the editors table enforces.
+ */
+function normalizeChatId(raw: string | undefined): string | null {
+  if (raw === undefined) return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  if (!/^-?\d+$/.test(trimmed)) {
+    throw new Error(
+      "Telegram chat ID must be a number (e.g. 123456789). " +
+        "@usernames and phone numbers don't work — DM @userinfobot " +
+        "on Telegram and copy the numeric 'Id' it shows.",
+    );
+  }
+  return trimmed;
+}
+
 export async function upsertUser(input: UpsertUserInput): Promise<User> {
   const db = getDb();
   if (!db) throw new Error("Database not configured");
@@ -82,7 +101,7 @@ export async function upsertUser(input: UpsertUserInput): Promise<User> {
       telegram_chat_id:
         input.telegramChatId === undefined
           ? prev.telegram_chat_id
-          : input.telegramChatId.trim() || null,
+          : normalizeChatId(input.telegramChatId),
       active: input.active ?? prev.active,
       notes:
         input.notes === undefined
@@ -104,7 +123,7 @@ export async function upsertUser(input: UpsertUserInput): Promise<User> {
     id: genId(),
     name: input.name.trim(),
     aliases: cleanAliases.length ? cleanAliases : [input.name.trim()],
-    telegram_chat_id: input.telegramChatId?.trim() || null,
+    telegram_chat_id: normalizeChatId(input.telegramChatId),
     active: input.active ?? true,
     notes: input.notes?.trim() || null,
     created_at: now,

@@ -152,12 +152,20 @@ export async function listCronRuns(limit: number = 50): Promise<CronRunRow[]> {
   }));
 }
 
+/**
+ * Most recent TERMINAL cron-run row (success / failed / skipped /
+ * crashed). The header's "last cron tick" indicator should reflect
+ * the last known-finished run, not a row that's still in flight (or
+ * stuck running) — otherwise a hung tick gets mistaken for a healthy
+ * one.
+ */
 export async function readLastCronRun(): Promise<LastCronRun | null> {
   const db = getDb();
   if (!db) return null;
   const { data, error } = await db
     .from("cron_runs")
     .select("started_at,finished_at,status,scraped,errors")
+    .neq("status", "running")
     .order("started_at", { ascending: false })
     .limit(1)
     .maybeSingle();

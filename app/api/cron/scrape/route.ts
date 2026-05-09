@@ -191,14 +191,21 @@ async function run(req: Request) {
     // gives us IST (`...+05:30`). String compare gets the wrong answer
     // when the timezones don't match, so we coerce both to ms.
     const cutoffMs = new Date(cutoffUsed).getTime();
-    const fresh = all
-      .filter((e) => {
-        const ms = new Date(e.publishedAt ?? "").getTime();
-        return Number.isFinite(ms) && ms > cutoffMs;
-      })
-      // newest first → oldest last; we slice MAX_PER_RUN from the top so a
-      // big backlog gets drained over multiple ticks
-      .slice(0, MAX_PER_RUN);
+    const candidates = all.filter((e) => {
+      const ms = new Date(e.publishedAt ?? "").getTime();
+      return Number.isFinite(ms) && ms > cutoffMs;
+    });
+    // Drain OLDEST-first when the backlog exceeds MAX_PER_RUN. The
+    // sitemap is sorted newest-first; if we sliced the top MAX_PER_RUN
+    // we'd advance the watermark to the newest item, leaving everything
+    // between the old watermark and the slice permanently un-scraped on
+    // the next tick. Taking the oldest MAX_PER_RUN advances the
+    // watermark only as far as the newest item we actually processed,
+    // so the next tick correctly picks up the rest.
+    const fresh =
+      candidates.length > MAX_PER_RUN
+        ? candidates.slice(-MAX_PER_RUN)
+        : candidates;
 
     if (fresh.length === 0) {
       await db
@@ -342,7 +349,7 @@ async function run(req: Request) {
       for (let i = 0; i < successfulScrapes.length; i++) {
         const { entry, article, url } = successfulScrapes[i];
         const user = matchedUsers[i];
-
+        try {
         // Apply slug verdict if Gemini gave us one — keeps the score
         // honest about URL-slug issues.
         if (slugVerdictMap[url]) article.slugVerdict = slugVerdictMap[url];
@@ -444,6 +451,19 @@ async function run(req: Request) {
             );
             nudgesSkipped += 1;
           }
+        }
+        } catch (perArticleErr) {
+          // A single bad article (e.g. runRules throws on a malformed
+          // payload) must not abort the rest of the batch. Log + skip.
+          console.warn(
+            "[cron] auto-nudge step failed for one article:",
+            url,
+            "→",
+            perArticleErr instanceof Error
+              ? perArticleErr.message
+              : String(perArticleErr),
+          );
+          nudgesSkipped += 1;
         }
       }
     }

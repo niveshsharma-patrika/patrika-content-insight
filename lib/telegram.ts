@@ -115,9 +115,14 @@ export function buildAuthorAlert(input: {
 }
 
 function escape(s: string): string {
-  // Telegram HTML mode supports <b>, <i>, <a>; escape only the special chars.
+  // Telegram HTML mode supports <b>, <i>, <a>. Escape every char that
+  // could break out of either text content OR an attribute value —
+  // including " (used inside href="..."). Without escaping ", a
+  // crafted URL or scraped headline could break message parsing and
+  // silently fail the send.
   return s
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
