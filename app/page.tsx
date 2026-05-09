@@ -10,8 +10,11 @@ import { findUsersForBylines, type User } from "@/lib/users";
 import { listSections } from "@/lib/sections";
 import { clampDateToWindow, dayHeaderLabel, todayInIST } from "@/lib/dates";
 
-export const dynamic = "force-dynamic";
-export const revalidate = 0;
+// Cache rendered output for 30s per URL (i.e. per ?date= / ?page= combo).
+// The cron only writes hourly so 30s of staleness is negligible, and
+// repeat visits within a session render in <50ms instead of re-running
+// every Supabase query.
+export const revalidate = 30;
 
 const PER_PAGE = 24;
 const RETENTION_DAYS = 7;

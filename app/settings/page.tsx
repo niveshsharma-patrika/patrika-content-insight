@@ -13,7 +13,10 @@ import {
 } from "@/lib/geminiUsage";
 import { rules } from "@/lib/rules";
 
-export const dynamic = "force-dynamic";
+// Cache the rendered page for 30 seconds. Edits made through the
+// inline forms call `router.refresh()` which busts the cache, so the
+// editor always sees their own changes immediately.
+export const revalidate = 30;
 
 export default async function SettingsPage() {
   const [
