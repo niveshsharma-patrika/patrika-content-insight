@@ -22,6 +22,15 @@
     "Helvetica Neue", Arial, "Noto Sans Devanagari", sans-serif;
 }
 
+/* Bump the root font size from the browser default of 16px to 17.5px.
+ * Tailwind's text-xs/sm/base/lg/etc. all use `rem` so they scale
+ * proportionally — the whole UI gets ~9% larger without us touching
+ * a single class. Hard-coded `text-[11px]` micro-labels stay fixed,
+ * which is fine: those are the captions we never want to dominate. */
+html {
+  font-size: 17.5px;
+}
+
 html,
 body {
   background: var(--background);
