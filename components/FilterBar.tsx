@@ -280,9 +280,14 @@ function TokenMultiSelect({
     };
   }, [open]);
 
+  // Trigger label: when nothing's picked, show "All X (count)" so the
+  // dropdown's existence and total option count are obvious. With one
+  // selected, show its label. With many, show "N selected".
   const label =
     selected.length === 0
-      ? placeholder
+      ? options.length > 0
+        ? `${placeholder} (${options.length})`
+        : placeholder
       : selected.length === 1
         ? options.find((o) => o.id === selected[0])?.label ?? selected[0]
         : `${selected.length} selected`;
@@ -303,7 +308,7 @@ function TokenMultiSelect({
         aria-haspopup="listbox"
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
-        className="rounded-md border bg-card px-2.5 py-1.5 text-sm w-52 text-left flex items-center justify-between gap-2 hover:bg-stone-50"
+        className="rounded-md border bg-card px-2.5 py-1.5 text-sm w-56 text-left flex items-center justify-between gap-2 hover:bg-stone-50 hover:border-stone-400"
       >
         <span
           className={`truncate ${selected.length === 0 ? "text-muted" : ""}`}
@@ -331,7 +336,7 @@ function TokenMultiSelect({
         <div
           role="listbox"
           aria-multiselectable="true"
-          className="absolute z-30 mt-1 w-72 rounded-lg border bg-card shadow-lg overflow-hidden"
+          className="absolute z-50 mt-1 w-72 rounded-lg border bg-card shadow-xl overflow-hidden"
         >
           <div className="px-3 py-2 border-b flex items-center gap-2">
             <input
