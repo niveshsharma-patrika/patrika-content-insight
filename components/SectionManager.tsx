@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState, useTransition } from "react";
 import type { Section } from "@/lib/sections";
 import { Paginator } from "./Paginator";
 
-const PER_PAGE = 20;
+const PER_PAGE = 10;
 
 export function SectionManager({
   initialSections,
@@ -111,6 +111,7 @@ export function SectionManager({
             page={safePage}
             pageCount={totalPages}
             total={filtered.length}
+            perPage={PER_PAGE}
             onPage={setPage}
           />
         </>

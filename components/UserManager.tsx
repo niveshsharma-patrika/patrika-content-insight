@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState, useTransition } from "react";
 import type { User } from "@/lib/users";
 import { Paginator } from "./Paginator";
 
-const PER_PAGE = 20;
+const PER_PAGE = 10;
 
 export function UserManager({
   initialUsers,
@@ -131,6 +131,7 @@ export function UserManager({
             page={safePage}
             pageCount={totalPages}
             total={filtered.length}
+            perPage={PER_PAGE}
             onPage={setPage}
           />
         </>
