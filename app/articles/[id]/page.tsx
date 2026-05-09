@@ -174,9 +174,8 @@ export default async function ArticlePage({ params }: { params: Params }) {
       </section>
 
       <SlugAIPanel
-        articleUrl={a.sitemap.url}
         hasGeminiKey={!!cfg.geminiApiKey}
-        initialVerdict={slugVerdict}
+        verdict={slugVerdict}
       />
 
       <RuleTabs
