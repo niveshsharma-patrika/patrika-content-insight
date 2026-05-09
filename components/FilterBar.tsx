@@ -10,6 +10,9 @@ export type FilterState = {
   status: Status;
   scope: ScopeFilter;
   sections: string[];
+  /** User ids matched against article bylines via the userMap. Empty
+   *  array = no author filter (show everyone). */
+  users: string[];
   sort: Sort;
 };
 
@@ -17,6 +20,7 @@ export const DEFAULT_FILTERS: FilterState = {
   status: "all",
   scope: "all",
   sections: [],
+  users: [],
   sort: "recent",
 };
 
@@ -42,12 +46,14 @@ const SORT_OPTIONS: Array<{ id: Sort; label: string }> = [
 ];
 
 export type SectionOption = { id: string; label: string };
+export type UserOption = { id: string; label: string };
 
 export function FilterBar({
   state,
   setState,
   totalOnPage,
   allCategories,
+  allUsers = [],
   resultCount,
 }: {
   state: FilterState;
@@ -56,9 +62,12 @@ export function FilterBar({
   /** Sections to show in the picker. Pass display labels — the multi-
    *  select keys & filter state still use raw ids under the hood. */
   allCategories: SectionOption[];
+  /** Authors to show in the Authors picker. */
+  allUsers?: UserOption[];
   resultCount: number;
 }) {
-  const labelById = new Map(allCategories.map((s) => [s.id, s.label]));
+  const sectionLabelById = new Map(allCategories.map((s) => [s.id, s.label]));
+  const userLabelById = new Map(allUsers.map((u) => [u.id, u.label]));
   const set = <K extends keyof FilterState>(k: K, v: FilterState[K]) =>
     setState({ ...state, [k]: v });
 
@@ -69,10 +78,18 @@ export function FilterBar({
     set("sections", next);
   };
 
+  const toggleUser = (id: string) => {
+    const next = state.users.includes(id)
+      ? state.users.filter((u) => u !== id)
+      : [...state.users, id];
+    set("users", next);
+  };
+
   const isDefault =
     state.status === "all" &&
     state.scope === "all" &&
-    state.sections.length === 0;
+    state.sections.length === 0 &&
+    state.users.length === 0;
 
   return (
     <div className="rounded-xl border bg-card overflow-hidden">
@@ -109,7 +126,9 @@ export function FilterBar({
         </Field>
 
         <Field label="Sections">
-          <SectionsMultiSelect
+          <TokenMultiSelect
+            placeholder="All sections"
+            searchPlaceholder="Search sections…"
             options={allCategories}
             selected={state.sections}
             onToggle={toggleSection}
@@ -117,6 +136,18 @@ export function FilterBar({
             onSelectAll={() =>
               set("sections", allCategories.map((s) => s.id))
             }
+          />
+        </Field>
+
+        <Field label="Authors">
+          <TokenMultiSelect
+            placeholder="All authors"
+            searchPlaceholder="Search authors…"
+            options={allUsers}
+            selected={state.users}
+            onToggle={toggleUser}
+            onClear={() => set("users", [])}
+            onSelectAll={() => set("users", allUsers.map((u) => u.id))}
           />
         </Field>
 
@@ -169,8 +200,15 @@ export function FilterBar({
         {state.sections.map((s) => (
           <ActiveChip
             key={`sec-${s}`}
-            label={labelById.get(s) ?? s}
+            label={sectionLabelById.get(s) ?? s}
             onClear={() => toggleSection(s)}
+          />
+        ))}
+        {state.users.map((u) => (
+          <ActiveChip
+            key={`usr-${u}`}
+            label={`✍︎ ${userLabelById.get(u) ?? u}`}
+            onClear={() => toggleUser(u)}
           />
         ))}
       </div>
@@ -200,14 +238,22 @@ function Field({
   );
 }
 
-function SectionsMultiSelect({
+/**
+ * Generic multi-select dropdown with a search box. Used for both
+ * Sections and Authors filters — same behavior, different data.
+ */
+function TokenMultiSelect({
+  placeholder,
+  searchPlaceholder,
   options,
   selected,
   onToggle,
   onClear,
   onSelectAll,
 }: {
-  options: SectionOption[];
+  placeholder: string;
+  searchPlaceholder: string;
+  options: { id: string; label: string }[];
   selected: string[];
   onToggle: (id: string) => void;
   onClear: () => void;
@@ -236,10 +282,10 @@ function SectionsMultiSelect({
 
   const label =
     selected.length === 0
-      ? "All sections"
+      ? placeholder
       : selected.length === 1
         ? options.find((o) => o.id === selected[0])?.label ?? selected[0]
-        : `${selected.length} sections`;
+        : `${selected.length} selected`;
 
   const filtered = query.trim()
     ? options.filter((o) => {
@@ -293,7 +339,7 @@ function SectionsMultiSelect({
               type="search"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search sections…"
+              placeholder={searchPlaceholder}
               className="flex-1 rounded-md border bg-card px-2 py-1 text-sm"
             />
           </div>
@@ -324,7 +370,7 @@ function SectionsMultiSelect({
           <ul className="max-h-72 overflow-y-auto py-1">
             {filtered.length === 0 ? (
               <li className="px-3 py-3 text-sm text-muted">
-                No sections match.
+                No matches.
               </li>
             ) : (
               filtered.map((opt) => {

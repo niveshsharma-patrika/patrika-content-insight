@@ -15,6 +15,7 @@ import {
   FilterBar,
   type FilterState,
   type SectionOption,
+  type UserOption,
 } from "./FilterBar";
 import type { ArticleAnalysis, DashboardSummary } from "@/lib/types";
 import type { SlugVerdict } from "@/lib/gemini";
@@ -25,6 +26,7 @@ export function ComplianceSection({
   summary,
   pageArticles,
   allCategories,
+  allUsers = [],
   slugVerdicts = {},
   userMap = {},
   editorCount = 0,
@@ -37,6 +39,8 @@ export function ComplianceSection({
   /** Articles published in the chosen IST hour. */
   pageArticles: ArticleAnalysis[];
   allCategories: SectionOption[];
+  /** Active authors — used to populate the Authors filter. */
+  allUsers?: UserOption[];
   editorCount?: number;
   slugVerdicts?: Record<string, SlugVerdict>;
   userMap?: Record<string, User | null>;
@@ -80,6 +84,14 @@ export function ComplianceSection({
         !filters.sections.includes(categoryFromUrl(a.sitemap.url))
       )
         return false;
+
+      // Authors — match against the userMap so unknown bylines never
+      // pass when an author filter is active.
+      if (filters.users.length > 0) {
+        const matched = userMap[a.sitemap.url];
+        if (!matched) return false;
+        if (!filters.users.includes(matched.id)) return false;
+      }
 
       // Compute scope-specific failure counts so status filter is correct.
       const inScope = (scope: "editorial" | "seo") => (r: typeof a.results[number]) =>
@@ -215,6 +227,7 @@ export function ComplianceSection({
           setState={setFilters}
           totalOnPage={pageArticles.length}
           allCategories={allCategories}
+          allUsers={allUsers}
           resultCount={filtered.length}
         />
 

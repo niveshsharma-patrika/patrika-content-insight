@@ -6,7 +6,7 @@ import { ComplianceSection } from "@/components/ComplianceSection";
 import { DatePicker } from "@/components/DatePicker";
 import { formatRelative } from "@/lib/utils";
 import { readCachedSlugVerdicts } from "@/lib/gemini";
-import { findUsersForBylines, type User } from "@/lib/users";
+import { findUsersForBylines, listUsers, type User } from "@/lib/users";
 import { listEditors } from "@/lib/editors";
 import { listSections } from "@/lib/sections";
 import { clampDateToWindow, dayHeaderLabel, todayInIST } from "@/lib/dates";
@@ -66,15 +66,21 @@ export default async function Page({
     userMap[a.sitemap.url] = matchedUsers[i];
   });
 
-  const sectionRows = await listSections({ activeOnly: true });
+  const [sectionRows, allActiveUsers, allEditors] = await Promise.all([
+    listSections({ activeOnly: true }),
+    listUsers(),
+    listEditors({ activeOnly: true }),
+  ]);
   const allCategories = sectionRows.map((s) => ({
     id: s.id,
     label: s.displayName,
   }));
+  // Authors filter — only active users, surfaced as { id, label }.
+  const allAuthorOptions = allActiveUsers
+    .filter((u) => u.active)
+    .map((u) => ({ id: u.id, label: u.name }));
 
-  const editorCount = (await listEditors({ activeOnly: true })).filter(
-    (e) => e.telegramChatId,
-  ).length;
+  const editorCount = allEditors.filter((e) => e.telegramChatId).length;
 
   const sitemapTotal = dashboard.sitemapTotalForDate;
   const lastTickRel = dashboard.lastCronTickAt
@@ -169,6 +175,7 @@ export default async function Page({
           summary={summary}
           pageArticles={dashboard.summary.articles}
           allCategories={allCategories}
+          allUsers={allAuthorOptions}
           slugVerdicts={slugVerdicts}
           userMap={userMap}
           editorCount={editorCount}
