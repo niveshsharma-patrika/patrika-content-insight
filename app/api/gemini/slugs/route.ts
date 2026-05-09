@@ -22,7 +22,9 @@ export async function POST(req: Request) {
   if (explicit && explicit.length > 0) {
     urls = explicit;
   } else {
-    const entries = await fetchSitemap();
+    // Always pull a fresh sitemap. lib/sitemap's in-memory module
+    // cache (5 min) could otherwise hide URLs that just landed.
+    const entries = await fetchSitemap({ forceRefresh: true });
     urls = entries.slice(0, limit).map((e) => e.url);
   }
 
@@ -42,7 +44,7 @@ export async function POST(req: Request) {
 }
 
 export async function GET() {
-  const entries = await fetchSitemap();
+  const entries = await fetchSitemap({ forceRefresh: true });
   const verdicts = await readCachedSlugVerdicts(
     entries.slice(0, 200).map((e) => e.url),
   );

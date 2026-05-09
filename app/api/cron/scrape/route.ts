@@ -86,32 +86,52 @@ async function run(req: Request) {
     );
   }
 
-  // ---- Lock: skip if another run is already in flight ----
+  // ---- Sweep stale 'running' rows from crashed previous ticks.
+  //      Without this, a tick that was killed mid-run leaves a
+  //      'running' row forever — the dashboard reports it as the
+  //      "last cron tick" and editors think the cron is healthy.
   const lockCutoff = new Date(
     Date.now() - LOCK_STALE_MIN * 60 * 1000,
   ).toISOString();
-  const { data: liveRuns } = await db
+  await db
     .from("cron_runs")
-    .select("*")
+    .update({
+      status: "crashed",
+      finished_at: new Date().toISOString(),
+      notes: "[stale running row swept on next-tick lock check]",
+    })
     .eq("status", "running")
-    .gte("started_at", lockCutoff);
-  if (liveRuns && liveRuns.length > 0) {
-    return NextResponse.json({
-      ok: true,
-      status: "skipped",
-      reason: "another run already in progress",
-    });
-  }
+    .lt("started_at", lockCutoff);
 
-  // ---- Insert "running" row ----
+  // ---- Lock: insert a fresh 'running' row.
+  //      A unique partial index (idx_cron_runs_only_one_running) makes
+  //      this fail with a duplicate-key error if another tick already
+  //      holds the lock, eliminating the TOCTOU race. We translate
+  //      that error into a 'skipped' response so two simultaneous
+  //      cron firings never both proceed to scrape and message.
   const { data: runRow, error: runErr } = await db
     .from("cron_runs")
     .insert({ status: "running" })
     .select("*")
     .single();
   if (runErr || !runRow) {
+    const msg = runErr?.message ?? "could not start run";
+    // Postgres unique-violation = 23505. Supabase surfaces it via the
+    // error code or a message containing "duplicate key". Any of those
+    // means we lost the lock race — that's fine, the other tick is
+    // doing the work.
+    const isDup =
+      runErr?.code === "23505" ||
+      /duplicate key|unique constraint/i.test(msg);
+    if (isDup) {
+      return NextResponse.json({
+        ok: true,
+        status: "skipped",
+        reason: "another run already in progress",
+      });
+    }
     return NextResponse.json(
-      { ok: false, error: runErr?.message ?? "could not start run" },
+      { ok: false, error: msg },
       { status: 500 },
     );
   }

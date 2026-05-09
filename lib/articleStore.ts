@@ -99,15 +99,50 @@ export async function writeArticle(
   const intro = article.paragraphs?.[0]?.text ?? "";
   void intro; // reserved for future fts/snippet use
 
-  // If a row already exists for this URL, this is a re-scrape — the
-  // cron picked it up again because Patrika bumped published_at.
-  // Tag it as updated so the dashboard surfaces the change.
+  // Detect a genuine Patrika edit, not just a re-call of writeArticle.
+  // We mark `is_updated = true` only when:
+  //   • the URL is already in the DB (existing row), AND
+  //   • either the new sitemap publish-time differs from what we
+  //     stored before, or the article's own modified_at moved past
+  //     its published_at.
+  // Otherwise the flag would flip on any backfill / manual rescrape,
+  // which is meaningless to editors.
+  const newSitemapPub =
+    parseIso(sitemapMeta?.publishedAt) ?? parseIso(article.publishedAt);
+  const newModified = parseIso(article.modifiedAt);
+  const newPublished = parseIso(article.publishedAt);
+
   const { data: existingRow } = await db
     .from("articles")
-    .select("scraped_at")
+    .select("sitemap_published_at,published_at,is_updated")
     .eq("url", url)
     .maybeSingle();
-  const isUpdate = existingRow !== null;
+
+  let isUpdate = false;
+  if (existingRow) {
+    const prev = existingRow as {
+      sitemap_published_at: string | null;
+      published_at: string | null;
+      is_updated: boolean | null;
+    };
+    const prevSitemapMs = prev.sitemap_published_at
+      ? new Date(prev.sitemap_published_at).getTime()
+      : null;
+    const newSitemapMs = newSitemapPub
+      ? new Date(newSitemapPub).getTime()
+      : null;
+    const sitemapBumped =
+      prevSitemapMs !== null &&
+      newSitemapMs !== null &&
+      newSitemapMs !== prevSitemapMs;
+    const modifiedAfterPublish =
+      !!(newModified && newPublished) &&
+      new Date(newModified).getTime() >
+        new Date(newPublished).getTime() + 60 * 1000;
+    // Sticky: stay updated once flagged so editors don't lose the cue
+    // if a later tick happens to re-write without further changes.
+    isUpdate = sitemapBumped || modifiedAfterPublish || prev.is_updated === true;
+  }
 
   const row: Omit<ArticleRow, "scraped_at"> & { scraped_at?: string } = {
     url,

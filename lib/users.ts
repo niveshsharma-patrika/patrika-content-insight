@@ -126,20 +126,41 @@ export async function deleteUser(id: string): Promise<void> {
 }
 
 /**
+ * True when `alias` appears in `byline` as a whole word/phrase, not as
+ * a sub-token. Prevents "Raj" from matching "Rajesh", "Sharma" from
+ * matching "Sharmaji", etc. — which would have routed Telegram nudges
+ * to the wrong author.
+ *
+ * Both sides are lowercased; alias must start AND end at a word
+ * boundary inside the byline. Word boundaries here are anything that
+ * isn't a Unicode letter, mark, or digit.
+ */
+function aliasMatchesByline(alias: string, byline: string): boolean {
+  const a = alias.trim().toLowerCase();
+  if (a.length < 3) return false;
+  const hay = byline.toLowerCase();
+  const escaped = a.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // (?:^|non-word-char) alias (?:non-word-char|$)
+  const re = new RegExp(
+    `(?:^|[^\\p{L}\\p{M}\\p{N}])${escaped}(?:[^\\p{L}\\p{M}\\p{N}]|$)`,
+    "u",
+  );
+  return re.test(hay);
+}
+
+/**
  * Match a byline string against the configured users. Returns the first
- * user whose alias appears inside the byline (case-insensitive substring).
+ * user whose alias appears as a whole word/phrase inside the byline.
  */
 export async function findUserForByline(
   byline: string | undefined,
 ): Promise<User | null> {
   if (!byline) return null;
   const list = await listUsers();
-  const hay = byline.toLowerCase();
   for (const u of list) {
     if (!u.active) continue;
     for (const alias of u.aliases) {
-      const a = alias.trim().toLowerCase();
-      if (a && a.length >= 3 && hay.includes(a)) return u;
+      if (aliasMatchesByline(alias, byline)) return u;
     }
   }
   return null;
@@ -226,7 +247,9 @@ function normalizeByline(b: string | undefined): string | null {
 }
 
 /**
- * Bulk-resolve bylines → users. Single DB call.
+ * Bulk-resolve bylines → users. Single DB call. Same word-boundary
+ * matching rule as `findUserForByline` so a "Raj" alias never
+ * wrongly catches "Rajesh".
  */
 export async function findUsersForBylines(
   bylines: Array<string | undefined>,
@@ -235,11 +258,9 @@ export async function findUsersForBylines(
   const active = list.filter((u) => u.active);
   return bylines.map((b) => {
     if (!b) return null;
-    const hay = b.toLowerCase();
     for (const u of active) {
       for (const alias of u.aliases) {
-        const a = alias.trim().toLowerCase();
-        if (a && a.length >= 3 && hay.includes(a)) return u;
+        if (aliasMatchesByline(alias, b)) return u;
       }
     }
     return null;

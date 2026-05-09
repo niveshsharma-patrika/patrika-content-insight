@@ -124,7 +124,11 @@ export async function scrapeArticle(url: string): Promise<ScrapedArticle> {
           "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 PatrikaContentInsight/1.0",
         Accept: "text/html,application/xhtml+xml",
       },
-      next: { revalidate: 1800 },
+      // Always hit Patrika fresh. Same trap as the sitemap fetch — a
+      // 30-min Next.js data cache here would silently return stale HTML
+      // on re-scrapes, defeating the whole `is_updated` flag and
+      // letting alt-text/headline edits go unnoticed.
+      cache: "no-store",
     });
     if (!res.ok) {
       return makeError(url, fetchedAt, `HTTP ${res.status}`);

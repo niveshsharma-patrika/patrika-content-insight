@@ -179,6 +179,15 @@ CREATE TABLE IF NOT EXISTS cron_runs (
 
 CREATE INDEX IF NOT EXISTS idx_cron_runs_started ON cron_runs(started_at DESC);
 
+-- Unique partial index — at most one cron tick can be in 'running'
+-- state at any time. Stops the TOCTOU race where two near-simultaneous
+-- cron triggers both observe an empty lock check and both insert a
+-- 'running' row, leading to duplicate scrapes and duplicate Telegram
+-- nudges. The cron route catches the resulting duplicate-key error
+-- and returns status='skipped'.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_cron_runs_only_one_running
+  ON cron_runs(status) WHERE status = 'running';
+
 -- =========================================================================
 -- (Optional, future) Daily aggregates for trend lines.
 -- =========================================================================
