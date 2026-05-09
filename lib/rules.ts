@@ -420,16 +420,16 @@ export const rules: Rule[] = [
     id: "intro-word-count",
     category: "intro",
     scope: "editorial",
-    title: "Intro paragraph should be 70–100 words",
+    title: "Intro paragraph should be 70–200 words",
     severity: "warning",
-    description: "पहला paragraph 70 से 100 words के बीच हो।",
+    description: "पहला paragraph 70 से 200 words के बीच हो।",
     check: (a) => {
       const intro = a.paragraphs.find((p) => p.wordCount > 25) ?? a.paragraphs[0];
       if (!intro) return fail("No intro paragraph found");
-      if (intro.wordCount < 50)
-        return fail(`Intro is ${intro.wordCount} words (<50)`);
-      if (intro.wordCount > 130)
-        return fail(`Intro is ${intro.wordCount} words (>130)`);
+      if (intro.wordCount < 70)
+        return fail(`Intro is ${intro.wordCount} words (<70)`);
+      if (intro.wordCount > 200)
+        return fail(`Intro is ${intro.wordCount} words (>200)`);
       return ok();
     },
   },
