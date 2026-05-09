@@ -1,6 +1,7 @@
 import { GoogleGenAI } from "@google/genai";
 import { getConfig } from "./config";
 import { getDb } from "./db";
+import { recordGeminiUsage } from "./geminiUsage";
 import type { SlugVerdict } from "./types";
 
 export type { SlugVerdict };
@@ -163,6 +164,29 @@ export async function checkSlugsWithGemini(
         thinkingConfig: { thinkingBudget: 0 },
       },
     });
+
+    // Best-effort usage accounting — fire and forget. If the SDK shape
+    // changes or the DB write fails, we just log and move on; cost
+    // tracking is informational, not load-bearing.
+    const usage = (response as unknown as {
+      usageMetadata?: {
+        promptTokenCount?: number;
+        candidatesTokenCount?: number;
+        totalTokenCount?: number;
+      };
+    }).usageMetadata;
+    if (usage) {
+      const promptTokens = usage.promptTokenCount ?? 0;
+      const outputTokens = usage.candidatesTokenCount ?? 0;
+      try {
+        await recordGeminiUsage(promptTokens, outputTokens);
+      } catch (e) {
+        console.warn(
+          "[gemini.checkSlugsWithGemini] usage record failed:",
+          e instanceof Error ? e.message : String(e),
+        );
+      }
+    }
 
     const text = response.text ?? "";
     const parsed = parseJsonArray(text);

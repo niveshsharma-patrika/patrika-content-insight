@@ -127,6 +127,20 @@ CREATE TABLE IF NOT EXISTS app_users (
 );
 
 -- =========================================================================
+-- 5b. Gemini token usage (per IST day)
+--     The cron records cumulative input/output tokens for every batch
+--     of slugs we send. Settings → Gemini usage reads this to show
+--     today / 7d / lifetime token totals + an estimated USD cost.
+-- =========================================================================
+CREATE TABLE IF NOT EXISTS gemini_usage (
+  date            DATE PRIMARY KEY,
+  prompt_tokens   BIGINT NOT NULL DEFAULT 0,
+  output_tokens   BIGINT NOT NULL DEFAULT 0,
+  request_count   INTEGER NOT NULL DEFAULT 0,
+  updated_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- =========================================================================
 -- 6. Cron health monitoring
 -- =========================================================================
 CREATE TABLE IF NOT EXISTS cron_runs (
@@ -173,3 +187,4 @@ ALTER TABLE sections         ENABLE ROW LEVEL SECURITY;
 ALTER TABLE app_users        ENABLE ROW LEVEL SECURITY;
 ALTER TABLE cron_runs        ENABLE ROW LEVEL SECURITY;
 ALTER TABLE daily_snapshots  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE gemini_usage     ENABLE ROW LEVEL SECURITY;

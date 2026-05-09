@@ -1,7 +1,10 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import type { User } from "@/lib/users";
+import { Paginator } from "./Paginator";
+
+const PER_PAGE = 20;
 
 export function UserManager({
   initialUsers,
@@ -12,12 +15,36 @@ export function UserManager({
 }) {
   const [users, setUsers] = useState<User[]>(initialUsers);
   const [editing, setEditing] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [page, setPage] = useState(1);
+
+  // Reset to page 1 whenever the search filter changes — otherwise the
+  // user can land on a "page 5" that no longer has any results.
+  useEffect(() => {
+    setPage(1);
+  }, [query]);
 
   async function refresh() {
     const r = await fetch("/api/users");
     const data = await r.json();
     if (data.ok) setUsers(data.users);
   }
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return users;
+    return users.filter(
+      (u) =>
+        u.name.toLowerCase().includes(q) ||
+        u.aliases.some((a) => a.toLowerCase().includes(q)) ||
+        (u.telegramChatId ?? "").toLowerCase().includes(q),
+    );
+  }, [users, query]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PER_PAGE));
+  const safePage = Math.min(page, totalPages);
+  const start = (safePage - 1) * PER_PAGE;
+  const visible = filtered.slice(start, start + PER_PAGE);
 
   const missingChatId = users.filter(
     (u) => u.active && !u.telegramChatId,
@@ -62,28 +89,51 @@ export function UserManager({
           cron scrapes its first batch of articles.
         </p>
       ) : (
-        <ul className="divide-y">
-          {users.map((u) => (
-            <li key={u.id}>
-              {editing === u.id ? (
-                <UserForm
-                  user={u}
-                  onCancel={() => setEditing(null)}
-                  onSaved={async () => {
-                    setEditing(null);
-                    await refresh();
-                  }}
-                />
-              ) : (
-                <UserRow
-                  user={u}
-                  onEdit={() => setEditing(u.id)}
-                  onDeleted={refresh}
-                />
-              )}
-            </li>
-          ))}
-        </ul>
+        <>
+          <div className="px-5 py-2 border-b bg-stone-50/30">
+            <input
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Filter authors by name, alias, or chat ID…"
+              className="w-full rounded-md border bg-card px-3 py-1.5 text-sm"
+            />
+          </div>
+          {visible.length === 0 ? (
+            <p className="px-5 py-6 text-center text-sm text-muted">
+              No authors match &ldquo;{query}&rdquo;.
+            </p>
+          ) : (
+            <ul className="divide-y">
+              {visible.map((u) => (
+                <li key={u.id}>
+                  {editing === u.id ? (
+                    <UserForm
+                      user={u}
+                      onCancel={() => setEditing(null)}
+                      onSaved={async () => {
+                        setEditing(null);
+                        await refresh();
+                      }}
+                    />
+                  ) : (
+                    <UserRow
+                      user={u}
+                      onEdit={() => setEditing(u.id)}
+                      onDeleted={refresh}
+                    />
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+          <Paginator
+            page={safePage}
+            pageCount={totalPages}
+            total={filtered.length}
+            onPage={setPage}
+          />
+        </>
       )}
     </section>
   );

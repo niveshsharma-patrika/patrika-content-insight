@@ -109,6 +109,49 @@ export type LastCronRun = {
   errors: number | null;
 };
 
+/**
+ * Recent cron-run rows, newest-first. Used by Settings → Cron history
+ * to show the editor when the cron actually fired and what each tick
+ * did. The default limit covers ~2 days at hourly cadence.
+ */
+export type CronRunRow = {
+  id: number;
+  startedAt: string;
+  finishedAt: string | null;
+  scraped: number | null;
+  errors: number | null;
+  status: string | null;
+  notes: string | null;
+};
+
+export async function listCronRuns(limit: number = 50): Promise<CronRunRow[]> {
+  const db = getDb();
+  if (!db) return [];
+  const { data, error } = await db
+    .from("cron_runs")
+    .select("id,started_at,finished_at,scraped,errors,status,notes")
+    .order("started_at", { ascending: false })
+    .limit(limit);
+  if (error || !data) return [];
+  return (data as Array<{
+    id: number;
+    started_at: string;
+    finished_at: string | null;
+    scraped: number | null;
+    errors: number | null;
+    status: string | null;
+    notes: string | null;
+  }>).map((r) => ({
+    id: r.id,
+    startedAt: r.started_at,
+    finishedAt: r.finished_at,
+    scraped: r.scraped,
+    errors: r.errors,
+    status: r.status,
+    notes: r.notes,
+  }));
+}
+
 export async function readLastCronRun(): Promise<LastCronRun | null> {
   const db = getDb();
   if (!db) return null;

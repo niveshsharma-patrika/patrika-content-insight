@@ -1,7 +1,10 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import type { Section } from "@/lib/sections";
+import { Paginator } from "./Paginator";
+
+const PER_PAGE = 20;
 
 export function SectionManager({
   initialSections,
@@ -11,6 +14,11 @@ export function SectionManager({
   const [sections, setSections] = useState<Section[]>(initialSections);
   const [editing, setEditing] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  const [page, setPage] = useState(1);
+
+  useEffect(() => {
+    setPage(1);
+  }, [query]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -21,6 +29,11 @@ export function SectionManager({
         s.displayName.toLowerCase().includes(q),
     );
   }, [sections, query]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PER_PAGE));
+  const safePage = Math.min(page, totalPages);
+  const start = (safePage - 1) * PER_PAGE;
+  const visible = filtered.slice(start, start + PER_PAGE);
 
   const activeCount = sections.filter((s) => s.active).length;
 
@@ -67,12 +80,12 @@ export function SectionManager({
             />
           </div>
           <ul className="divide-y">
-            {filtered.length === 0 ? (
+            {visible.length === 0 ? (
               <li className="px-5 py-6 text-center text-sm text-muted">
                 No sections match &ldquo;{query}&rdquo;.
               </li>
             ) : (
-              filtered.map((s) => (
+              visible.map((s) => (
                 <li key={s.id}>
                   {editing === s.id ? (
                     <SectionForm
@@ -94,6 +107,12 @@ export function SectionManager({
               ))
             )}
           </ul>
+          <Paginator
+            page={safePage}
+            pageCount={totalPages}
+            total={filtered.length}
+            onPage={setPage}
+          />
         </>
       )}
     </section>

@@ -2,16 +2,35 @@ import Link from "next/link";
 import { getConfig } from "@/lib/config";
 import { UserManager } from "@/components/UserManager";
 import { SectionManager } from "@/components/SectionManager";
+import { CronHistory } from "@/components/CronHistory";
+import { GeminiUsage } from "@/components/GeminiUsage";
 import { listUsers } from "@/lib/users";
 import { listSections } from "@/lib/sections";
+import { listCronRuns } from "@/lib/dashboardStats";
+import {
+  getLifetimeGeminiUsage,
+  listGeminiUsage,
+} from "@/lib/geminiUsage";
 import { rules } from "@/lib/rules";
 
 export const dynamic = "force-dynamic";
 
 export default async function SettingsPage() {
-  const cfg = await getConfig();
-  const users = await listUsers();
-  const sections = await listSections();
+  const [
+    cfg,
+    users,
+    sections,
+    cronRuns,
+    geminiRows,
+    geminiLifetime,
+  ] = await Promise.all([
+    getConfig(),
+    listUsers(),
+    listSections(),
+    listCronRuns(50),
+    listGeminiUsage(7),
+    getLifetimeGeminiUsage(),
+  ]);
 
   const editorialCount = rules.filter((r) => r.scope === "editorial").length;
   const seoCount = rules.filter((r) => r.scope === "seo").length;
@@ -47,6 +66,10 @@ export default async function SettingsPage() {
       />
 
       <SectionManager initialSections={sections} />
+
+      <CronHistory runs={cronRuns} />
+
+      <GeminiUsage rows={geminiRows} lifetime={geminiLifetime} />
 
       <section className="rounded-xl border bg-card p-5 space-y-2">
         <div className="flex items-baseline justify-between gap-3 flex-wrap">
