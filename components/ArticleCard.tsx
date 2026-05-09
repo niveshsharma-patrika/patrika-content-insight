@@ -43,8 +43,18 @@ export function ArticleCard({
     }
   })();
 
+  // Visual highlight for low-scoring articles. Cards below 75% editorial
+  // score get a red-tinted border + faint red wash so editors can scan
+  // a page of 24 cards and spot the ones that need attention without
+  // reading every score number. Threshold is independent of the
+  // 80% Telegram-nudge cutoff to give a slightly tighter visual band.
+  const isLowScore = ok && a.editorialScore < 75;
+  const cardClass = isLowScore
+    ? "rounded-xl border-2 border-red-300 bg-red-50/40 overflow-hidden flex flex-col hover:border-red-400 transition"
+    : "rounded-xl border bg-card overflow-hidden flex flex-col hover:border-stone-300 transition";
+
   return (
-    <article className="rounded-xl border bg-card overflow-hidden flex flex-col hover:border-stone-300 transition">
+    <article className={cardClass}>
       {/* top strip — meta */}
       <div className="px-4 pt-3.5 pb-2 flex items-center gap-2 text-xs text-muted flex-wrap border-b">
         <span className="capitalize font-medium text-foreground">{cat}</span>
