@@ -1,8 +1,13 @@
 "use client";
 
-import Link from "next/link";
-import { useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useTransition,
+} from "react";
 import { ArticleCard } from "./ArticleCard";
 import { TopIssueCard } from "./TopIssueCard";
 import {
@@ -184,7 +189,11 @@ export function ComplianceSection({
       </section>
 
       {/* === ARTICLE CARDS === */}
-      <section ref={articlesAnchorRef} className="space-y-3">
+      <section
+        ref={articlesAnchorRef}
+        id="articles-anchor"
+        className="space-y-3"
+      >
         <div className="flex items-baseline justify-between gap-3 flex-wrap">
           <div>
             <h2 className="text-lg font-semibold tracking-tight">
@@ -263,6 +272,30 @@ function Pagination({
   page: number;
   pageCount: number;
 }) {
+  // Wraps router.push() so React tells us when the next page is still
+  // loading on the server. Without this, clicking Next looked frozen
+  // until the new render arrived — Next.js doesn't auto-show a loader
+  // for `?page=` query-string navigations the way it does for path
+  // navigations.
+  const router = useRouter();
+  const params = useSearchParams();
+  const [pending, startTransition] = useTransition();
+
+  function go(p: number) {
+    const merged = new URLSearchParams(params?.toString() ?? "");
+    merged.set("page", String(p));
+    startTransition(() => {
+      router.push(`/?${merged.toString()}`, { scroll: false });
+      // also auto-scroll to the top of the article grid so the user sees
+      // their click registered
+      setTimeout(() => {
+        document
+          .getElementById("articles-anchor")
+          ?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 0);
+    });
+  }
+
   if (pageCount <= 1) return null;
 
   // Build a compact page list: first, last, current ±2, ellipses elsewhere.
@@ -282,47 +315,63 @@ function Pagination({
   return (
     <nav
       aria-label="Pagination"
-      className="flex items-center justify-center gap-1 pt-2 flex-wrap"
+      className={`flex items-center justify-center gap-1 pt-2 flex-wrap ${
+        pending ? "opacity-60 pointer-events-none" : ""
+      }`}
+      aria-busy={pending}
     >
-      <PageLink page={page - 1} disabled={page <= 1} label="‹ Prev" />
+      <PageBtn
+        disabled={page <= 1 || pending}
+        onClick={() => go(page - 1)}
+        label="‹ Prev"
+      />
       {items.map((it, i) =>
         it === "ellipsis" ? (
           <span key={`e-${i}`} className="px-1.5 text-muted">
             …
           </span>
         ) : (
-          <PageLink
+          <PageBtn
             key={it}
-            page={it}
             label={String(it)}
             active={it === page}
+            disabled={pending}
+            pending={pending && it !== page}
+            onClick={() => go(it)}
           />
         ),
       )}
-      <PageLink page={page + 1} disabled={page >= pageCount} label="Next ›" />
+      <PageBtn
+        disabled={page >= pageCount || pending}
+        onClick={() => go(page + 1)}
+        label="Next ›"
+      />
+      {pending ? (
+        <span
+          className="text-xs text-muted ml-2 inline-flex items-center gap-1.5"
+          aria-live="polite"
+        >
+          <span className="size-1.5 rounded-full bg-amber-500 animate-pulse" />
+          loading…
+        </span>
+      ) : null}
     </nav>
   );
 }
 
-function PageLink({
-  page,
+function PageBtn({
   label,
   active = false,
   disabled = false,
+  pending = false,
+  onClick,
 }: {
-  page: number;
   label: string;
   active?: boolean;
   disabled?: boolean;
+  pending?: boolean;
+  onClick: () => void;
 }) {
-  // Preserve all current query params (notably `date`) when navigating
-  // pages. Otherwise switching pages would silently drop the chosen
-  // date and bounce the user back to "today".
-  const params = useSearchParams();
-  const merged = new URLSearchParams(params?.toString() ?? "");
-  merged.set("page", String(page));
-  const href = `/?${merged.toString()}`;
-
   if (disabled) {
     return (
       <span className="px-2.5 py-1 text-sm text-muted-foreground select-none">
@@ -331,15 +380,18 @@ function PageLink({
     );
   }
   return (
-    <Link
-      href={href}
+    <button
+      type="button"
+      onClick={onClick}
       className={`px-2.5 py-1 rounded-md text-sm tabular-nums transition ${
         active
           ? "bg-foreground text-background"
-          : "border bg-card hover:bg-stone-50"
+          : pending
+            ? "border bg-stone-100 text-muted"
+            : "border bg-card hover:bg-stone-50"
       }`}
     >
       {label}
-    </Link>
+    </button>
   );
 }

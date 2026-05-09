@@ -3,7 +3,11 @@ import { todayInIST } from "./dates";
 import { rules, runRules } from "./rules";
 import { articleId } from "./articleId";
 import { readCachedSlugVerdicts } from "./gemini";
-import { readArticleById, readArticlesForIstDate } from "./articleStore";
+import {
+  countArticlesForIstDate,
+  readArticleById,
+  readArticlesForIstDate,
+} from "./articleStore";
 import { readDailySnapshot, readLastCronRun } from "./dashboardStats";
 import type {
   ArticleAnalysis,
@@ -149,18 +153,20 @@ export async function getPaginatedDashboard(opts?: {
   istDate: string;
 }> {
   const istDate = opts?.date ?? todayInIST();
+  const perPage = opts?.perPage ?? 24;
+  const page = Math.max(1, opts?.page ?? 1);
+  const offset = (page - 1) * perPage;
 
-  const [stored, snapshot, lastTick] = await Promise.all([
-    readArticlesForIstDate(istDate),
+  // Four parallel queries instead of one big SELECT *. The page only
+  // needs the visible 24 articles, the count is cheap and indexed.
+  const [visible, totalForDate, snapshot, lastTick] = await Promise.all([
+    readArticlesForIstDate(istDate, { offset, limit: perPage }),
+    countArticlesForIstDate(istDate),
     readDailySnapshot(istDate),
     readLastCronRun(),
   ]);
 
-  const perPage = opts?.perPage ?? 24;
-  const page = Math.max(1, opts?.page ?? 1);
-  const pageCount = Math.max(1, Math.ceil(stored.length / perPage));
-  const start = (page - 1) * perPage;
-  const visible = stored.slice(start, start + perPage);
+  const pageCount = Math.max(1, Math.ceil(totalForDate / perPage));
 
   const slugVerdicts = await readCachedSlugVerdicts(
     visible.map((s) => s.entry.url),
@@ -172,11 +178,11 @@ export async function getPaginatedDashboard(opts?: {
 
   return {
     summary,
-    totalEntries: snapshot?.totalArticles ?? stored.length,
+    totalEntries: snapshot?.totalArticles ?? totalForDate,
     page,
     perPage,
     pageCount,
-    cachedCount: stored.length,
+    cachedCount: totalForDate,
     sitemapUrl: SITEMAP_URL,
     generatedAt: summary.generatedAt,
     failedToFetch: summary.failedToFetch,
@@ -190,6 +196,13 @@ export async function getPaginatedDashboard(opts?: {
  * Aggregate stats across all of the chosen IST date's stored articles.
  * Used by the Top Issues panel so it reflects the whole day, not just
  * the visible page slice.
+ *
+ * The returned summary's `articles` field is intentionally an empty
+ * array — the home page only consumes the AGGREGATE counts here
+ * (topViolations, byCategory, averages). Including the full per-
+ * article analyses would push 5–10 MB of redundant JSON to the
+ * client (the visible page's analyses already arrive separately as
+ * `pageArticles`). Stripping it keeps the payload to a few KB.
  */
 export async function getCachedDashboardStats(opts?: {
   date?: string;
@@ -205,7 +218,10 @@ export async function getCachedDashboardStats(opts?: {
     .map((s) =>
       buildAnalysis(s.entry, s.article, slugVerdicts[s.entry.url], s.isUpdated),
     );
-  return buildSummary(analyses);
+  const summary = buildSummary(analyses);
+  // Drop the heavy per-article payloads from what we hand back —
+  // see jsdoc above. Keeps server→client RSC payload tiny.
+  return { ...summary, articles: [] };
 }
 
 function buildSummary(articles: ArticleAnalysis[]): DashboardSummary {

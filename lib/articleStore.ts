@@ -280,6 +280,7 @@ export async function clearStore(): Promise<void> {
  */
 export async function readArticlesForIstDate(
   istDate: string,
+  opts?: { offset?: number; limit?: number },
 ): Promise<StoredArticle[]> {
   const db = getDb();
   if (!db) return [];
@@ -287,18 +288,49 @@ export async function readArticlesForIstDate(
   const endIso = new Date(
     new Date(startIso).getTime() + 24 * 60 * 60 * 1000,
   ).toISOString();
-  const { data, error } = await db
+  let q = db
     .from("articles")
     .select("*")
     .gte("published_at", startIso)
     .lt("published_at", endIso)
     .order("published_at", { ascending: false });
+  // When the caller passes a window, only fetch that window from the
+  // DB. The home page renders 24 articles per page — fetching all 250+
+  // and slicing client-side wasted ~10MB of network and ~150ms of
+  // JSON parse per render.
+  if (typeof opts?.offset === "number" && typeof opts?.limit === "number") {
+    q = q.range(opts.offset, opts.offset + opts.limit - 1);
+  }
+  const { data, error } = await q;
   if (error || !data) return [];
   return (data as ArticleRow[]).map((row) => ({
     entry: rowToSitemapEntry(row),
     article: row.payload,
     isUpdated: row.is_updated ?? false,
   }));
+}
+
+/**
+ * Count articles in the IST date window without pulling row payloads.
+ * Used by the dashboard for the "X scraped today" header and to compute
+ * `pageCount` without reading all rows.
+ */
+export async function countArticlesForIstDate(
+  istDate: string,
+): Promise<number> {
+  const db = getDb();
+  if (!db) return 0;
+  const startIso = `${istDate}T00:00:00+05:30`;
+  const endIso = new Date(
+    new Date(startIso).getTime() + 24 * 60 * 60 * 1000,
+  ).toISOString();
+  const { count, error } = await db
+    .from("articles")
+    .select("url", { count: "exact", head: true })
+    .gte("published_at", startIso)
+    .lt("published_at", endIso);
+  if (error) return 0;
+  return count ?? 0;
 }
 
 /**
