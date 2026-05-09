@@ -159,16 +159,23 @@ export const rules: Rule[] = [
     id: "url-no-repeated-words",
     category: "url",
     scope: "editorial",
-    title: "URL should not repeat words",
+    title: "URL slug should not repeat words within itself",
     severity: "warning",
-    description: "URL में कोई word unnecessarily repeat नहीं होना चाहिए।",
+    description:
+      "URL slug में कोई word unnecessarily repeat नहीं होना चाहिए। Section प्रिफ़िक्स (जैसे `noida-news/`) के साथ overlap counted नहीं होता.",
     check: (a) => {
-      const words = slugWords(urlSlug(a.url)).filter((w) => w.length > 2);
+      // Only check the LAST path segment (the article slug). The
+      // section prefix appearing in both the section and the slug
+      // — e.g. "noida-news/killing-in-noida-today" — is normal and
+      // shouldn't trigger this rule.
+      const lastSegment =
+        urlSlug(a.url).split("/").filter(Boolean).pop() ?? "";
+      const words = slugWords(lastSegment).filter((w) => w.length > 2);
       const counts = new Map<string, number>();
       for (const w of words) counts.set(w, (counts.get(w) ?? 0) + 1);
       const dups = [...counts.entries()].filter(([, c]) => c > 1).map(([w]) => w);
       if (dups.length)
-        return fail(`URL repeats words: ${dups.join(", ")}`);
+        return fail(`URL slug repeats words: ${dups.join(", ")}`);
       return ok();
     },
   },
@@ -525,23 +532,30 @@ export const rules: Rule[] = [
     },
   },
   {
-    id: "image-feature-min-width",
+    id: "image-feature-min-size",
     category: "image",
     scope: "seo",
-    title: "Feature image should be ≥1200px wide (Discover requirement)",
+    title: "Feature photo should be ≥1200×670 (Discover requirement)",
     severity: "error",
     description:
-      "Discover boosts CTR by ~45% for images ≥1200px (Feb 2026). Set width attr or og:image:width.",
+      "Photo size needs to be 1200×670 or greater. Discover boosts CTR by ~45% for images ≥1200px (Feb 2026). Set width + height attrs or og:image:width/height.",
     reference: REF_DISCOVER_2026,
     check: (a) => {
       const feat = a.images.find((i) => i.isFeature) ?? a.images[0];
-      if (!feat) return fail("No feature image to size-check");
-      if (typeof feat.width === "number" && feat.width < 1200)
-        return fail(`Feature image is ${feat.width}px wide (<1200px)`);
-      if (typeof feat.width !== "number")
+      if (!feat) return fail("No feature photo to size-check");
+      const w = feat.width;
+      const h = feat.height;
+      if (typeof w !== "number" || typeof h !== "number") {
         return fail(
-          "Feature image has no declared width (set og:image:width or width attr)",
+          "Feature photo has no declared width/height (set og:image:width and og:image:height, or width/height attrs)",
         );
+      }
+      if (w < 1200 || h < 670) {
+        return fail(
+          `Feature photo is ${w}×${h} (<1200×670)`,
+          `Filename: ${feat.filename ?? feat.src}`,
+        );
+      }
       return ok();
     },
   },
@@ -587,6 +601,40 @@ export const rules: Rule[] = [
         );
       }
       return ok();
+    },
+  },
+  {
+    id: "image-alt-not-title",
+    category: "image",
+    scope: "editorial",
+    title: "Image alt text should differ from the article title",
+    severity: "warning",
+    description:
+      "Alt text describes the photo for screen-readers and search-image bots. Copy-pasting the headline tells them nothing extra and looks lazy. Each image's alt should describe what's in *that* photo.",
+    reference:
+      "WCAG 2.1 SC 1.1.1 / Google Image SEO — alt text should describe the image, not duplicate adjacent headings.",
+    check: (a) => {
+      const titleNorm = (a.title ?? "").trim().toLowerCase();
+      if (!titleNorm) return ok();
+      const dups = a.images.filter((img) => {
+        const alt = (img.alt ?? "").trim().toLowerCase();
+        if (!alt) return false; // missing-alt is a separate rule
+        // Catch exact dupes and near-dupes (alt is a prefix of title or v.v.)
+        if (alt === titleNorm) return true;
+        if (alt.length >= 20 && titleNorm.startsWith(alt)) return true;
+        if (titleNorm.length >= 20 && alt.startsWith(titleNorm)) return true;
+        return false;
+      });
+      if (dups.length === 0) return ok();
+      const list = dups
+        .slice(0, 3)
+        .map((d) => `${d.filename ?? d.src}: "${d.alt}"`)
+        .join("\n");
+      const more = dups.length > 3 ? `\n…and ${dups.length - 3} more` : "";
+      return fail(
+        `${dups.length} image${dups.length === 1 ? "" : "s"} use the article title as alt text`,
+        `${list}${more}`,
+      );
     },
   },
   {

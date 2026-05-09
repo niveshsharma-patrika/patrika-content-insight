@@ -391,17 +391,53 @@ function parseArticleHtml(
 
   const root = findArticleRoot($);
 
+  // Collect paragraphs from anywhere on the page that's INSIDE any
+  // article-body container, then deduplicate. We used to limit search
+  // to the single `root` element returned by findArticleRoot, but
+  // Patrika's story layout sometimes spreads paragraphs across
+  // multiple sibling `storybody_text` chunks that aren't descendants
+  // of the first matched root. Result: word counts coming back ~40%
+  // short on longer pieces.
+  //
+  // Two-pass approach:
+  //   1. Take every paragraph already inside `root`.
+  //   2. Add any extra paragraphs that live inside a storybody_*
+  //      / article-body / story-content container ANYWHERE on the
+  //      page, skipping the related/aside/footer/nav junk.
+  //   3. De-dupe by exact text so we never double-count a paragraph
+  //      that happens to live under both the root and a
+  //      storybody_text leaf.
   const rawParas: Paragraph[] = [];
+  const seenText = new Set<string>();
   const $root = $(root as unknown as cheerio.Cheerio<never>);
-  $root.find("p").each((_, el) => {
-    const $el = $(el);
-    if ($el.closest("[class*='related'],[class*='also-read'],[class*='read-also'],aside,figure,figcaption,footer,nav").length) {
-      return;
-    }
+
+  const RELATED_FILTER =
+    "[class*='related'],[class*='also-read'],[class*='read-also'],[class*='trending'],[class*='recommended'],aside,figure,figcaption,footer,nav";
+  const STORY_BODY_SELECTOR =
+    "[class*='storybody'],[class*='story-content'],[class*='story_content'],[class*='article-body'],[class*='article_body']";
+
+  function consider($el: cheerio.Cheerio<never>) {
+    if ($el.closest(RELATED_FILTER).length) return;
     const text = $el.text().replace(/\s+/g, " ").trim();
     if (text.length < 3) return;
+    if (seenText.has(text)) return;
+    seenText.add(text);
     rawParas.push({ text, wordCount: wordCount(text) });
+  }
+
+  // Pass 1 — paragraphs inside the chosen root.
+  $root.find("p").each((_, el) => {
+    consider($(el) as unknown as cheerio.Cheerio<never>);
   });
+
+  // Pass 2 — paragraphs inside story-body containers anywhere on the
+  // page, in case the root selector picked a too-narrow container
+  // and missed siblings. Same junk-filter applies.
+  $(STORY_BODY_SELECTOR)
+    .find("p")
+    .each((_, el) => {
+      consider($(el) as unknown as cheerio.Cheerio<never>);
+    });
 
   const h2Headings: string[] = [];
   $root.find("h2").each((_, el) => {

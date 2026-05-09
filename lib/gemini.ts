@@ -101,7 +101,13 @@ Examples:
 - "jaipur-vidhansabha-vyavstha-naye-niyam" → hinglish, hinglish — vidhansabha/vyavstha/naye/niyam are all transliterated Hindi.
 - "modi-cabinet-meeting-decisions" → clear, english.
 
-Words like 'mp', 'up', 'bjp', 'cm', 'pm', 'iit' are legitimate Indian abbreviations and do not by themselves make a slug Hinglish.`;
+Words like 'mp', 'up', 'bjp', 'cm', 'pm', 'iit' are legitimate Indian abbreviations and do not by themselves make a slug Hinglish.
+
+Indian-English vocabulary is ACCEPTED English — do not flag these as Hinglish:
+- "lakh" (= 100,000) and "crore" (= 10 million): these are standard Indian English number words, used in mainstream Indian media and government communication. Treat them like "million" / "billion".
+- "rupee" / "rupees" / "rs": Indian currency, standard English.
+- "panchayat", "lok sabha", "rajya sabha", "vidhan sabha", "tehsil", "taluka": only flag these if a clearly more common English equivalent is used by Patrika style. They are widely-accepted Indian-English administrative terms.
+Do NOT suggest replacing "lakh" with "hundred thousand" or "crore" with "ten million" — that reads as foreign in Indian context.`;
 
 function extractSlug(url: string): string {
   try {
