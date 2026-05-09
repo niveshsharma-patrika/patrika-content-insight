@@ -1,12 +1,5 @@
 import type { Rule, RuleResult, ScrapedArticle, SitemapEntry } from "./types";
 
-const FILLER_WORDS = [
-  "is", "am", "are", "of", "the", "a", "an", "to", "in",
-  "on", "at", "for", "with", "by", "and", "or", "but",
-  "which", "who", "where", "what", "when", "why", "how",
-  "this", "that", "these", "those", "be", "been",
-];
-
 const DEVANAGARI_RE = /[ऀ-ॿ]/;
 const JUNK_URL_RE = /[%#?&]/;
 
@@ -134,24 +127,6 @@ export const rules: Rule[] = [
       const slug = urlSlug(a.url);
       if (JUNK_URL_RE.test(slug))
         return fail("URL contains junk characters", slug);
-      return ok();
-    },
-  },
-  {
-    id: "url-no-filler-words",
-    category: "url",
-    scope: "editorial",
-    title: "URL should not contain filler words",
-    severity: "warning",
-    description:
-      "is, am, are, of, which, who, where जैसे filler words URL में नहीं होने चाहिए।",
-    check: (a) => {
-      const words = slugWords(urlSlug(a.url));
-      const found = words.filter((w) => FILLER_WORDS.includes(w));
-      if (found.length)
-        return fail(
-          `URL contains filler words: ${[...new Set(found)].join(", ")}`,
-        );
       return ok();
     },
   },
