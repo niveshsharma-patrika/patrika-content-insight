@@ -1254,17 +1254,30 @@ export const rules: Rule[] = [
   },
 ];
 
-export function runRules(article: ScrapedArticle, sitemap: SitemapEntry) {
-  return rules.map((rule) => ({
-    rule: {
-      id: rule.id,
-      category: rule.category,
-      scope: rule.scope,
-      title: rule.title,
-      severity: rule.severity,
-      description: rule.description,
-      reference: rule.reference,
-    },
-    result: rule.check(article, sitemap),
-  }));
+/**
+ * Run every rule against an article, optionally skipping any rule whose
+ * ID is in `disabledIds`. Disabled rules are removed from the result
+ * entirely — they don't contribute to score, violation counts, or
+ * top-issue selection. Callers fetch the set once per request via
+ * `getDisabledRuleIds()` and pass it in (avoiding an I/O call per rule).
+ */
+export function runRules(
+  article: ScrapedArticle,
+  sitemap: SitemapEntry,
+  disabledIds: ReadonlySet<string> = new Set(),
+) {
+  return rules
+    .filter((rule) => !disabledIds.has(rule.id))
+    .map((rule) => ({
+      rule: {
+        id: rule.id,
+        category: rule.category,
+        scope: rule.scope,
+        title: rule.title,
+        severity: rule.severity,
+        description: rule.description,
+        reference: rule.reference,
+      },
+      result: rule.check(article, sitemap),
+    }));
 }

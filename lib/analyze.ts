@@ -10,6 +10,7 @@ import {
   readPublishedAtsForIstDate,
 } from "./articleStore";
 import { readDailySnapshot, readLastCronRun } from "./dashboardStats";
+import { getDisabledRuleIds } from "./ruleSettings";
 import type {
   ArticleAnalysis,
   DashboardSummary,
@@ -35,13 +36,14 @@ function severityWeight(sev: "error" | "warning" | "info"): number {
 function buildAnalysis(
   entry: SitemapEntry,
   article: ScrapedArticle,
-  slugVerdict?: SlugVerdict,
-  isUpdated: boolean = false,
+  slugVerdict: SlugVerdict | undefined,
+  isUpdated: boolean,
+  disabledRuleIds: ReadonlySet<string>,
 ): ArticleAnalysis {
   if (article.ok && slugVerdict) {
     article.slugVerdict = slugVerdict;
   }
-  const results = article.ok ? runRules(article, entry) : [];
+  const results = article.ok ? runRules(article, entry, disabledRuleIds) : [];
   let errorCount = 0;
   let warningCount = 0;
   let passCount = 0;
@@ -113,12 +115,16 @@ export async function getArticleAnalysisById(
 ): Promise<ArticleAnalysis | null> {
   const stored = await readArticleById(id);
   if (!stored) return null;
-  const verdicts = await readCachedSlugVerdicts([stored.entry.url]);
+  const [verdicts, disabledRuleIds] = await Promise.all([
+    readCachedSlugVerdicts([stored.entry.url]),
+    getDisabledRuleIds(),
+  ]);
   return buildAnalysis(
     stored.entry,
     stored.article,
     verdicts[stored.entry.url],
     stored.isUpdated,
+    disabledRuleIds,
   );
 }
 
@@ -207,13 +213,20 @@ export async function getHourDashboard(opts: {
     readLastCronRun(),
   ]);
 
-  const slugVerdicts = await readCachedSlugVerdicts(
-    hourArticles.map((s) => s.entry.url),
-  );
+  const [slugVerdicts, disabledRuleIds] = await Promise.all([
+    readCachedSlugVerdicts(hourArticles.map((s) => s.entry.url)),
+    getDisabledRuleIds(),
+  ]);
   const analyses = hourArticles.map((s) =>
-    buildAnalysis(s.entry, s.article, slugVerdicts[s.entry.url], s.isUpdated),
+    buildAnalysis(
+      s.entry,
+      s.article,
+      slugVerdicts[s.entry.url],
+      s.isUpdated,
+      disabledRuleIds,
+    ),
   );
-  const summary = buildSummary(analyses);
+  const summary = buildSummary(analyses, disabledRuleIds);
 
   return {
     summary,
@@ -249,21 +262,31 @@ export async function getCachedDashboardStats(opts?: {
   const istDate = opts?.date ?? todayInIST();
   const stored = await readArticlesForIstDate(istDate);
   if (stored.length === 0) return null;
-  const slugVerdicts = await readCachedSlugVerdicts(
-    stored.map((s) => s.entry.url),
-  );
+  const [slugVerdicts, disabledRuleIds] = await Promise.all([
+    readCachedSlugVerdicts(stored.map((s) => s.entry.url)),
+    getDisabledRuleIds(),
+  ]);
   const analyses = stored
     .filter((s) => s.article.ok)
     .map((s) =>
-      buildAnalysis(s.entry, s.article, slugVerdicts[s.entry.url], s.isUpdated),
+      buildAnalysis(
+        s.entry,
+        s.article,
+        slugVerdicts[s.entry.url],
+        s.isUpdated,
+        disabledRuleIds,
+      ),
     );
-  const summary = buildSummary(analyses);
+  const summary = buildSummary(analyses, disabledRuleIds);
   // Drop the heavy per-article payloads from what we hand back —
   // see jsdoc above. Keeps server→client RSC payload tiny.
   return { ...summary, articles: [] };
 }
 
-function buildSummary(articles: ArticleAnalysis[]): DashboardSummary {
+function buildSummary(
+  articles: ArticleAnalysis[],
+  disabledRuleIds: ReadonlySet<string> = new Set(),
+): DashboardSummary {
   const violationMap = new Map<
     string,
     {
@@ -276,6 +299,12 @@ function buildSummary(articles: ArticleAnalysis[]): DashboardSummary {
     }
   >();
   for (const r of rules) {
+    // Skip disabled rules so they never appear in top-violations even
+    // at count=0 (the .filter(count>0) below already excludes those,
+    // but excluding here is defensive — if some article happened to
+    // carry a stale result row for a now-disabled rule, we still want
+    // it absent.)
+    if (disabledRuleIds.has(r.id)) continue;
     violationMap.set(r.id, {
       ruleId: r.id,
       title: r.title,

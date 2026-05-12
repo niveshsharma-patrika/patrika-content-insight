@@ -201,6 +201,21 @@ CREATE TABLE IF NOT EXISTS daily_snapshots (
 );
 
 -- =========================================================================
+-- Rule overrides — editor-controlled on/off switches for the rule catalog.
+--
+-- A rule with no row here (or `enabled = true`) participates in scoring.
+-- `enabled = false` means: skip the rule entirely — no score weight, no
+-- violation count, no Telegram nudge trigger. The set is read at every
+-- dashboard render and cron tick (cached 5 min in-memory) so a toggle
+-- takes effect on the next page load without rescraping articles.
+-- =========================================================================
+CREATE TABLE IF NOT EXISTS rule_overrides (
+  rule_id     TEXT PRIMARY KEY,
+  enabled     BOOLEAN NOT NULL DEFAULT TRUE,
+  updated_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- =========================================================================
 -- Row Level Security
 --
 -- Every read and write in this app goes through the SERVICE_ROLE key,
@@ -221,3 +236,4 @@ ALTER TABLE editors          ENABLE ROW LEVEL SECURITY;
 ALTER TABLE cron_runs        ENABLE ROW LEVEL SECURITY;
 ALTER TABLE daily_snapshots  ENABLE ROW LEVEL SECURITY;
 ALTER TABLE gemini_usage     ENABLE ROW LEVEL SECURITY;
+ALTER TABLE rule_overrides   ENABLE ROW LEVEL SECURITY;

@@ -13,6 +13,7 @@ import { ensureUsersForBylines, findUsersForBylines } from "@/lib/users";
 import { listEditors } from "@/lib/editors";
 import { ensureSectionsForUrls } from "@/lib/sections";
 import { runRules } from "@/lib/rules";
+import { getDisabledRuleIds } from "@/lib/ruleSettings";
 import { buildAuthorAlert, sendTelegramMessage } from "@/lib/telegram";
 import { getConfig } from "@/lib/config";
 import {
@@ -337,6 +338,11 @@ async function run(req: Request) {
     let nudgesSkipped = 0;
     const cfg = await getConfig();
     if (cfg.telegramBotToken && successfulScrapes.length > 0) {
+      // Editor-controlled rule on/off switches. Fetched once for the
+      // whole batch — same toggles apply to every article. Force a
+      // fresh read so a toggle made in Settings reflects on the very
+      // next cron tick, not 5 minutes later.
+      const disabledRuleIds = await getDisabledRuleIds({ forceRefresh: true });
       // Bulk-resolve byline → user once, instead of one DB call per article.
       const bylines = successfulScrapes.map((s) => s.article.author);
       const matchedUsers = await findUsersForBylines(bylines);
@@ -356,7 +362,7 @@ async function run(req: Request) {
 
         // Compute the editorial score the same way the dashboard does:
         // weighted pass-rate over editorial-scope rules only.
-        const results = runRules(article, entry);
+        const results = runRules(article, entry, disabledRuleIds);
         let earned = 0;
         let total = 0;
         for (const r of results) {
