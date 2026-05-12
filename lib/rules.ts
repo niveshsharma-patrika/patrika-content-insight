@@ -176,10 +176,21 @@ export const rules: Rule[] = [
     title: "URL slug must be proper English (not Hinglish or Hindi)",
     severity: "warning",
     description:
-      "AI-evaluated by Gemini. Patrika.com style requires URL slugs to be proper English — Hinglish (transliterated Hindi like 'vyavstha', 'sankalp', 'paramparik') and Devanagari are not allowed. Proper nouns (Udaipur, Modi, Rajasthan) are accepted English usage.",
+      "AI-evaluated by Gemini. Patrika.com style requires URL slugs to be proper English — Hinglish (transliterated Hindi like 'vyavstha', 'sankalp', 'paramparik') and Devanagari are not allowed. Proper nouns (Udaipur, Modi, Rajasthan) are accepted English usage. " +
+      "Astrology / health-news sections are exempt — their slugs commonly include domain Hindi terms (mantra, vrat, ayurveda, yoga-asana) that read as Hinglish to Gemini but are accepted Patrika style.",
     reference:
       "Patrika.com URL style + Google SEO Starter Guide — Use simple, descriptive URLs.",
     check: (a) => {
+      // Section exemptions. The leading path segment ("category") for
+      // these two sections is intentionally allowed to include
+      // transliterated Hindi terms — they're domain vocab, not slug
+      // hygiene problems.
+      const HINGLISH_EXEMPT_SECTIONS = new Set([
+        "astrology-and-spirituality",
+        "health-news",
+      ]);
+      if (a.category && HINGLISH_EXEMPT_SECTIONS.has(a.category)) return ok();
+
       const slug = (urlSlug(a.url).split("/").filter(Boolean).pop() ?? "")
         .replace(/-?\d{5,}$/, "")
         .replace(/\.html?$/i, "");
@@ -402,14 +413,14 @@ export const rules: Rule[] = [
     id: "intro-word-count",
     category: "intro",
     scope: "editorial",
-    title: "Intro paragraph should be 70–200 words",
+    title: "Intro paragraph should be 40–200 words",
     severity: "warning",
-    description: "पहला paragraph 70 से 200 words के बीच हो।",
+    description: "पहला paragraph 40 से 200 words के बीच हो।",
     check: (a) => {
       const intro = a.paragraphs.find((p) => p.wordCount > 25) ?? a.paragraphs[0];
       if (!intro) return fail("No intro paragraph found");
-      if (intro.wordCount < 70)
-        return fail(`Intro is ${intro.wordCount} words (<70)`);
+      if (intro.wordCount < 40)
+        return fail(`Intro is ${intro.wordCount} words (<40)`);
       if (intro.wordCount > 200)
         return fail(`Intro is ${intro.wordCount} words (>200)`);
       return ok();
@@ -421,12 +432,32 @@ export const rules: Rule[] = [
     id: "body-word-count",
     category: "body",
     scope: "editorial",
-    title: "Body word count should be ≥350",
+    title: "Body word count should be ≥350 (±5% leniency)",
     severity: "error",
-    description: "Word count 350-400 words से कम न हो।",
+    description:
+      "Word count 350-400 words से कम न हो। ±5% leniency दी गई है (≥333 words पास होंगे). " +
+      "Video articles (/videos/*) और 'खबर अपडेट की जा रही है' placeholder stories छोड़ दिए जाते हैं.",
     check: (a) => {
-      if (a.wordCount < 350)
-        return fail(`Body is only ${a.wordCount} words (<350)`);
+      // Skip video pages — they're hosted articles where the body is the
+      // video itself, the word count signal doesn't apply.
+      if (urlSlug(a.url).startsWith("/videos/")) return ok();
+      // Skip breaking-news placeholder shells — Patrika publishes a
+      // skeleton with this exact line while the desk is still writing,
+      // then back-fills the body. Flagging it as "too short" is noise.
+      const PLACEHOLDER = "खबर अपडेट की जा रही है";
+      if (
+        (a.bodyText || "").includes(PLACEHOLDER) ||
+        a.paragraphs.some((p) => p.text.includes(PLACEHOLDER))
+      )
+        return ok();
+      // 5% leniency on the 350-word target → effective threshold 333.
+      // Articles that fall just short get a pass; clearly-short articles
+      // still fail.
+      const MIN_WITH_LENIENCY = Math.round(350 * 0.95);
+      if (a.wordCount < MIN_WITH_LENIENCY)
+        return fail(
+          `Body is only ${a.wordCount} words (<${MIN_WITH_LENIENCY}, target 350)`,
+        );
       return ok();
     },
   },
@@ -576,6 +607,78 @@ export const rules: Rule[] = [
         );
       }
       return ok();
+    },
+  },
+  {
+    id: "image-alt-has-keyword",
+    category: "image",
+    scope: "editorial",
+    title: "At least one image alt should contain a headline keyword",
+    severity: "warning",
+    description:
+      "कम से कम एक image का alt text headline का एक keyword (≥4 letters) ज़रूर हो — जिससे screen-reader users और Google Image Search दोनों को image का context मिल सके. Stop-words (का, के, में, the, and, ...) नहीं गिने जाते.",
+    reference:
+      "Google Image SEO — Alt text should describe the image and include relevant page keywords.",
+    check: (a) => {
+      if (a.images.length === 0) return ok();
+      // Require something useful to match against.
+      const title = (a.title || "").trim();
+      if (title.length < 6) return ok();
+
+      // Stop-words. Don't penalize an alt that's missing function words —
+      // the rule is about whether ANY meaningful headline term appears.
+      const STOPWORDS = new Set<string>([
+        // Devanagari function words / particles
+        "और", "का", "के", "की", "को", "में", "से", "पर", "ने", "है",
+        "हैं", "हो", "हुआ", "हुई", "होगा", "होगी", "होंगे", "होंगी",
+        "नहीं", "तो", "ही", "भी", "जो", "जब", "तब", "वह", "यह", "इस",
+        "उस", "इन", "उन", "अब", "कब", "कैसे", "क्या", "क्यों",
+        // English equivalents
+        "the", "and", "for", "with", "from", "this", "that", "these",
+        "those", "your", "their", "have", "will", "what", "when",
+        "where", "which", "while", "after", "before", "into", "over",
+        "about", "than", "then", "they", "them", "there",
+      ]);
+
+      // Extract content words from the headline. Words ≥4 chars (covers
+      // most meaningful Hindi/English terms without catching 2-3 letter
+      // particles), not in the stopword list.
+      const titleKeywords = Array.from(
+        new Set(
+          title
+            .toLowerCase()
+            .split(/[^\p{L}\p{M}\p{N}]+/u)
+            .filter((w) => w.length >= 4 && !STOPWORDS.has(w)),
+        ),
+      );
+      if (titleKeywords.length === 0) return ok();
+
+      // Only look at images that already have alt text — the
+      // image-alt-text rule handles missing alts; we don't want to
+      // double-fail the same image.
+      const imagesWithAlt = a.images.filter(
+        (img) => img.alt && img.alt.trim().length >= 3,
+      );
+      if (imagesWithAlt.length === 0) return ok();
+
+      const hasMatch = imagesWithAlt.some((img) => {
+        const altLower = (img.alt || "").toLowerCase();
+        return titleKeywords.some((kw) => altLower.includes(kw));
+      });
+      if (hasMatch) return ok();
+
+      const altList = imagesWithAlt
+        .slice(0, 3)
+        .map((img) => `"${img.alt}"`)
+        .join("\n");
+      return fail(
+        `No image alt contains a keyword from the headline`,
+        [
+          `Headline: ${title}`,
+          `Expected at least one of: ${titleKeywords.slice(0, 6).join(", ")}`,
+          `Alt texts checked:\n${altList}`,
+        ].join("\n"),
+      );
     },
   },
   {
