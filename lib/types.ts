@@ -61,6 +61,14 @@ export type StructuredData = {
   publisherName?: string;
   publisherLogo?: string;
   imageInSchema?: string;
+  /**
+   * Publisher-curated full body text from JSON-LD `articleBody`.
+   * Preferred over DOM-scraped bodyText when present because Patrika's
+   * live-blog layout splits entries across separate <h2> subheads + <p>
+   * bodies — our DOM walk only collects <p> and undercounts the article
+   * by ~30 words per live-blog page. JSON-LD is single-flow and accurate.
+   */
+  articleBody?: string;
   raw?: string;
 };
 

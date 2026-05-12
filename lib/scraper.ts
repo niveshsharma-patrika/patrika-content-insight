@@ -292,6 +292,16 @@ function extractStructuredData($: cheerio.CheerioAPI): StructuredData {
           if (typeof io.url === "string") out.imageInSchema = io.url;
         }
       }
+      // Capture articleBody: Patrika emits the full body (including
+      // live-blog subheads inline) in JSON-LD. Keep the longest one we
+      // find — `@graph` can have multiple nested articles and a
+      // truncated description shouldn't beat the real body.
+      if (typeof obj.articleBody === "string") {
+        const ab = obj.articleBody.trim();
+        if (ab && (!out.articleBody || ab.length > out.articleBody.length)) {
+          out.articleBody = ab;
+        }
+      }
     }
     // Walk @graph and nested objects
     for (const v of Object.values(obj)) {
@@ -680,7 +690,24 @@ function parseArticleHtml(
     hasReadAlso = readAlsoMarkers.some((m) => fullText.includes(m));
   }
 
-  const bodyText = rawParas.map((p) => p.text).join("\n\n");
+  // Body text source-of-truth selection:
+  //   - DOM-derived bodyText is built from <p> tags inside the story
+  //     root, with junk (image captions, "ये भी पढ़ें" markers) and
+  //     missing <h2> subheads on live-blog pages.
+  //   - JSON-LD `articleBody`, when present, is publisher-curated and
+  //     emits subheads inline, so the word count matches what an editor
+  //     actually sees on the page.
+  // Prefer JSON-LD when it's meaningfully larger (>10 words gap) so we
+  // don't disturb articles where the two agree. `paragraphs[]` stays
+  // DOM-derived so per-paragraph rules (intro length, long paragraphs)
+  // are unaffected.
+  const domBodyText = rawParas.map((p) => p.text).join("\n\n");
+  const domWordCount = wordCount(domBodyText);
+  const jsonLdBody = structuredData.articleBody;
+  const jsonLdWordCount = jsonLdBody ? wordCount(jsonLdBody) : 0;
+  const useJsonLd = !!jsonLdBody && jsonLdWordCount > domWordCount + 10;
+  const bodyText = useJsonLd ? (jsonLdBody as string) : domBodyText;
+  const finalWordCount = useJsonLd ? jsonLdWordCount : domWordCount;
   const bodyHtml = ($root.html() || "").slice(0, 200000);
 
   let category: string | undefined;
@@ -726,7 +753,7 @@ function parseArticleHtml(
     internalLinkCount,
     externalLinkCount,
     hasReadAlso,
-    wordCount: wordCount(bodyText),
+    wordCount: finalWordCount,
     structuredData,
     viewport,
     charset,
