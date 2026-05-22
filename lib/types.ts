@@ -118,6 +118,38 @@ export type ScrapedArticle = {
   // Gemini-evaluated slug verdict — populated in analyzeOne when a cached
   // verdict exists for this URL. Rules can read it; absence means "not run".
   slugVerdict?: SlugVerdict;
+
+  // ---- HTTP-level perf signals (captured during fetch). Used by the
+  // SEO-track rules so we can flag redirects, missing compression /
+  // cache headers, and slow TTFB without needing a real browser.
+  /** ms from `fetch()` call to the resolved Response object (server-to-server TTFB-ish). */
+  ttfbMs?: number;
+  /** Final URL after any redirects — `res.url`. May differ from the requested URL. */
+  finalUrl?: string;
+  /** `res.redirected`. True if at least one redirect happened. */
+  redirected?: boolean;
+  /** Value of the `content-encoding` response header (e.g. "br", "gzip"). */
+  contentEncoding?: string;
+  /** Value of the `cache-control` response header. */
+  cacheControl?: string;
+  /** Byte length of the raw HTML body. */
+  htmlBytes?: number;
+
+  // ---- <head>-derived perf signals. Heuristic, not a Lighthouse
+  // replacement — but enough to surface "you forgot async on a
+  // 200kB analytics script" patterns.
+  /** Synchronous <script> tags inside <head> (no async/defer). */
+  renderBlockingScripts?: number;
+  /** <link rel="stylesheet"> in <head> without media="print"-style scoping. */
+  renderBlockingStyles?: number;
+  /** <link rel="preload" as="font"> count in <head>. */
+  fontPreloadCount?: number;
+  /** Any linked CSS or inline style contains `font-display: swap`. */
+  hasFontDisplaySwap?: boolean;
+  /** <script src=...> whose host isn't patrika.com. */
+  thirdPartyScriptCount?: number;
+  /** Value of <link rel="amphtml" href="..."> if present. */
+  ampUrl?: string;
 };
 
 export type Severity = "error" | "warning" | "info";

@@ -134,6 +134,7 @@ export async function scrapeArticle(url: string): Promise<ScrapedArticle> {
     return makeError(url, fetchedAt, "Malformed URL");
   }
   try {
+    const fetchStart = performance.now();
     const res = await fetch(url, {
       signal: controller.signal,
       headers: {
@@ -147,11 +148,26 @@ export async function scrapeArticle(url: string): Promise<ScrapedArticle> {
       // letting alt-text/headline edits go unnoticed.
       cache: "no-store",
     });
+    // ms from fetch call to headers received. Includes DNS + TCP + TLS
+    // + server processing + first-byte. Server-to-server, so it's not
+    // a faithful proxy for what a real Indian mobile user sees, but
+    // it's a stable trend signal — if it doubles week-over-week,
+    // something on Patrika's end got slower.
+    const ttfbMs = Math.round(performance.now() - fetchStart);
     if (!res.ok) {
       return makeError(url, fetchedAt, `HTTP ${res.status}`);
     }
+    const httpMeta = {
+      ttfbMs,
+      finalUrl: res.url,
+      redirected: res.redirected === true,
+      contentEncoding:
+        res.headers.get("content-encoding")?.toLowerCase().trim() ?? "",
+      cacheControl: res.headers.get("cache-control")?.trim() ?? "",
+    };
     const html = await res.text();
-    return parseArticleHtml(url, fetchedAt, html);
+    const htmlBytes = Buffer.byteLength(html, "utf8");
+    return parseArticleHtml(url, fetchedAt, html, { ...httpMeta, htmlBytes });
   } catch (err) {
     return makeError(url, fetchedAt, (err as Error).message);
   } finally {
@@ -320,10 +336,108 @@ function extractStructuredData($: cheerio.CheerioAPI): StructuredData {
   return out;
 }
 
+type HttpMeta = {
+  ttfbMs: number;
+  finalUrl: string;
+  redirected: boolean;
+  contentEncoding: string;
+  cacheControl: string;
+  htmlBytes: number;
+};
+
+/**
+ * Inspect a Cheerio <head> for performance smells the SEO-track rules
+ * care about: render-blocking sync scripts, render-blocking stylesheets,
+ * font preloads, font-display swap, third-party scripts, AMP link.
+ */
+function analyzeHead(
+  $: cheerio.CheerioAPI,
+  pageUrl: string,
+): {
+  renderBlockingScripts: number;
+  renderBlockingStyles: number;
+  fontPreloadCount: number;
+  hasFontDisplaySwap: boolean;
+  thirdPartyScriptCount: number;
+  ampUrl: string | undefined;
+} {
+  const $head = $("head");
+  let renderBlockingScripts = 0;
+  let renderBlockingStyles = 0;
+  let fontPreloadCount = 0;
+  let hasFontDisplaySwap = false;
+  let thirdPartyScriptCount = 0;
+  let ampUrl: string | undefined;
+
+  let pageHost = "";
+  try {
+    pageHost = new URL(pageUrl).hostname;
+  } catch {
+    // ignore
+  }
+
+  $head.find("script").each((_, el) => {
+    const $el = $(el);
+    const src = $el.attr("src");
+    if (src) {
+      const isAsync = $el.attr("async") !== undefined;
+      const isDefer = $el.attr("defer") !== undefined;
+      const isModule = ($el.attr("type") ?? "").toLowerCase() === "module";
+      if (!isAsync && !isDefer && !isModule) renderBlockingScripts += 1;
+      try {
+        const host = new URL(src, pageUrl).hostname;
+        if (host && pageHost && !host.endsWith(pageHost.replace(/^www\./, "")))
+          thirdPartyScriptCount += 1;
+      } catch {
+        // ignore unparseable src
+      }
+    }
+  });
+
+  $head.find("link").each((_, el) => {
+    const $el = $(el);
+    const rel = ($el.attr("rel") ?? "").toLowerCase();
+    if (rel.includes("stylesheet")) {
+      const media = ($el.attr("media") ?? "").toLowerCase();
+      // A media="print" stylesheet doesn't block the initial render.
+      if (!media.includes("print")) renderBlockingStyles += 1;
+    }
+    if (rel.includes("preload") && ($el.attr("as") ?? "").toLowerCase() === "font") {
+      fontPreloadCount += 1;
+    }
+    if (rel === "amphtml") {
+      const href = $el.attr("href")?.trim();
+      if (href) ampUrl = href;
+    }
+  });
+
+  // Inline <style> blocks in head with font-display: swap signal that
+  // the publisher has thought about font-loading.
+  $head.find("style").each((_, el) => {
+    const txt = $(el).contents().text();
+    if (/font-display\s*:\s*swap/i.test(txt)) hasFontDisplaySwap = true;
+  });
+  // Some sites set font-display via a JS-injected style; cheap fallback:
+  // scan the entire raw HTML for the directive.
+  if (!hasFontDisplaySwap) {
+    hasFontDisplaySwap = /font-display\s*:\s*swap/i.test($.root().html() ?? "");
+  }
+
+  return {
+    renderBlockingScripts,
+    renderBlockingStyles,
+    fontPreloadCount,
+    hasFontDisplaySwap,
+    thirdPartyScriptCount,
+    ampUrl,
+  };
+}
+
 function parseArticleHtml(
   url: string,
   fetchedAt: string,
   html: string,
+  httpMeta?: HttpMeta,
 ): ScrapedArticle {
   const $ = cheerio.load(html);
 
@@ -719,6 +833,11 @@ function parseArticleHtml(
     // ignore
   }
 
+  // <head> perf signals — render-blocking scripts/styles, font loading,
+  // third-party scripts, AMP link. Runs once per article so the SEO
+  // rules don't each have to re-walk the DOM.
+  const headSignals = analyzeHead($, url);
+
   return {
     url,
     fetchedAt,
@@ -761,5 +880,20 @@ function parseArticleHtml(
     mixedContentImageCount,
     unsafeExternalLinkCount,
     pageProtocol,
+    // HTTP-level perf metrics (undefined when parseArticleHtml is
+    // called from a non-scrapeArticle code path — e.g. legacy tests).
+    ttfbMs: httpMeta?.ttfbMs,
+    finalUrl: httpMeta?.finalUrl,
+    redirected: httpMeta?.redirected,
+    contentEncoding: httpMeta?.contentEncoding,
+    cacheControl: httpMeta?.cacheControl,
+    htmlBytes: httpMeta?.htmlBytes,
+    // Head-derived signals.
+    renderBlockingScripts: headSignals.renderBlockingScripts,
+    renderBlockingStyles: headSignals.renderBlockingStyles,
+    fontPreloadCount: headSignals.fontPreloadCount,
+    hasFontDisplaySwap: headSignals.hasFontDisplaySwap,
+    thirdPartyScriptCount: headSignals.thirdPartyScriptCount,
+    ampUrl: headSignals.ampUrl,
   };
 }

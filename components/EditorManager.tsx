@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import type { Editor } from "@/lib/editors";
+import type { Editor, EditorRole } from "@/lib/editors";
 
 /**
  * Settings → Editors panel.
@@ -28,6 +28,12 @@ export function EditorManager({
   }
 
   const activeCount = editors.filter((e) => e.active).length;
+  const editorialCount = editors.filter(
+    (e) => e.active && e.roles.includes("editorial"),
+  ).length;
+  const seoCount = editors.filter(
+    (e) => e.active && e.roles.includes("seo"),
+  ).length;
 
   return (
     <section
@@ -48,13 +54,28 @@ export function EditorManager({
           ) : null}
         </div>
         <p className="text-xs text-muted mt-1">
-          Editors receive a Telegram nudge for{" "}
-          <span className="font-medium text-foreground">every</span> article
-          scoring below 80% — across all sections, all authors. {activeCount}{" "}
-          active.
+          Editors get Telegram nudges for low-scoring articles. Each editor
+          picks one or both alert tracks:
+          <br />
+          <span className="inline-flex items-center gap-1 mt-1">
+            <span className="rounded bg-amber-100 text-amber-900 px-1.5 py-0.5 text-[10px] font-medium">
+              Editorial
+            </span>{" "}
+            fires when editorialScore &lt; 80 (headline, intro, alt text…)
+          </span>
+          <br />
+          <span className="inline-flex items-center gap-1">
+            <span className="rounded bg-sky-100 text-sky-900 px-1.5 py-0.5 text-[10px] font-medium">
+              SEO
+            </span>{" "}
+            fires when seoScore &lt; 80 (canonical, redirects, TTFB, AMP…)
+          </span>
+          <br />
+          <span className="mt-1 block">
+            {activeCount} active · {editorialCount} editorial · {seoCount} seo
+          </span>
           {!telegramConfigured ? (
             <span className="text-amber-700">
-              {" "}
               The <span className="font-mono">TELEGRAM_BOT_TOKEN</span> env
               var isn&apos;t set, so messages won&apos;t deliver yet.
             </span>
@@ -144,13 +165,29 @@ function EditorRow({
   return (
     <div className="px-5 py-3 grid grid-cols-12 items-center gap-3">
       <div className="col-span-5 min-w-0">
-        <div className="font-medium text-sm flex items-center gap-2">
+        <div className="font-medium text-sm flex items-center gap-2 flex-wrap">
           <span
             className={`inline-block size-1.5 rounded-full ${
               editor.active ? "bg-emerald-500" : "bg-stone-300"
             }`}
           />
           {editor.name}
+          {editor.roles.includes("editorial") ? (
+            <span
+              className="rounded bg-amber-100 text-amber-900 px-1.5 py-0.5 text-[10px] font-medium"
+              title="Receives editorial nudges (editorialScore < 80)"
+            >
+              Editorial
+            </span>
+          ) : null}
+          {editor.roles.includes("seo") ? (
+            <span
+              className="rounded bg-sky-100 text-sky-900 px-1.5 py-0.5 text-[10px] font-medium"
+              title="Receives SEO nudges (seoScore < 80)"
+            >
+              SEO
+            </span>
+          ) : null}
         </div>
         {editor.notes ? (
           <div className="text-[11px] text-muted line-clamp-1 mt-0.5">
@@ -213,12 +250,32 @@ function EditorForm({
     editor?.telegramChatId ?? "",
   );
   const [active, setActive] = useState(editor?.active ?? true);
+  // New editors default to editorial-only (matches the pre-roles
+  // behavior). Editing an existing editor starts from their saved set.
+  const [rolesState, setRolesState] = useState<{
+    editorial: boolean;
+    seo: boolean;
+  }>(() => ({
+    editorial: editor ? editor.roles.includes("editorial") : true,
+    seo: editor ? editor.roles.includes("seo") : false,
+  }));
   const [notes, setNotes] = useState(editor?.notes ?? "");
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
+  // At least one role must be selected — saving with zero is meaningless
+  // (editor receives nothing). UI enforces this by disabling Save.
+  const noRoleSelected = !rolesState.editorial && !rolesState.seo;
+
   function save() {
+    if (noRoleSelected) {
+      setError("Select at least one alert track (Editorial or SEO).");
+      return;
+    }
     setError(null);
+    const roles: EditorRole[] = [];
+    if (rolesState.editorial) roles.push("editorial");
+    if (rolesState.seo) roles.push("seo");
     startTransition(async () => {
       const r = await fetch("/api/editors", {
         method: "POST",
@@ -228,6 +285,7 @@ function EditorForm({
           name,
           telegramChatId,
           active,
+          roles,
           notes,
         }),
       });
@@ -301,11 +359,59 @@ function EditorForm({
         />
         Active — receives Telegram nudges
       </label>
+      <fieldset className="sm:col-span-2 border rounded-md px-3 py-2 bg-card">
+        <legend className="text-[10px] uppercase tracking-wider text-muted font-medium px-1">
+          Alert tracks
+        </legend>
+        <div className="flex flex-wrap gap-x-5 gap-y-1.5 text-sm">
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={rolesState.editorial}
+              onChange={(e) =>
+                setRolesState((p) => ({ ...p, editorial: e.target.checked }))
+              }
+            />
+            <span>
+              <span className="rounded bg-amber-100 text-amber-900 px-1.5 py-0.5 text-[10px] font-medium mr-1">
+                Editorial
+              </span>
+              editorialScore &lt; 80
+            </span>
+          </label>
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={rolesState.seo}
+              onChange={(e) =>
+                setRolesState((p) => ({ ...p, seo: e.target.checked }))
+              }
+            />
+            <span>
+              <span className="rounded bg-sky-100 text-sky-900 px-1.5 py-0.5 text-[10px] font-medium mr-1">
+                SEO
+              </span>
+              seoScore &lt; 80
+            </span>
+          </label>
+        </div>
+        {noRoleSelected ? (
+          <p className="text-[11px] text-amber-700 mt-1.5">
+            Pick at least one — an editor with zero tracks won&apos;t
+            receive anything.
+          </p>
+        ) : null}
+      </fieldset>
       <div className="sm:col-span-2 flex items-center gap-2">
         <button
           type="button"
           onClick={save}
-          disabled={pending || !name.trim() || !telegramChatId.trim()}
+          disabled={
+            pending ||
+            !name.trim() ||
+            !telegramChatId.trim() ||
+            noRoleSelected
+          }
           className="rounded-md bg-foreground text-background px-3 py-1.5 text-sm font-medium disabled:opacity-60"
         >
           {pending ? "Saving…" : editor ? "Save changes" : "Add editor"}

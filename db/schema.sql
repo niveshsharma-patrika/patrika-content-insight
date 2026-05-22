@@ -129,10 +129,21 @@ CREATE TABLE IF NOT EXISTS editors (
   name              TEXT NOT NULL,
   telegram_chat_id  TEXT NOT NULL,
   active            BOOLEAN DEFAULT TRUE,
+  -- Which kinds of nudges this editor wants:
+  --   'editorial' → editorialScore < 80
+  --   'seo'       → seoScore < 80
+  -- Default is editorial-only so existing rows keep their current
+  -- behavior when the column is added.
+  roles             TEXT[] NOT NULL DEFAULT ARRAY['editorial']::TEXT[],
   notes             TEXT,
   created_at        TIMESTAMPTZ DEFAULT NOW(),
   updated_at        TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- One-shot migration for installs that pre-date the roles column.
+-- IF NOT EXISTS makes this idempotent on fresh databases too.
+ALTER TABLE editors
+  ADD COLUMN IF NOT EXISTS roles TEXT[] NOT NULL DEFAULT ARRAY['editorial']::TEXT[];
 
 -- =========================================================================
 -- 5. Authors (replaces .data/users.json)

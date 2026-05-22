@@ -114,6 +114,43 @@ export function buildAuthorAlert(input: {
     .join("\n");
 }
 
+/**
+ * SEO-failure alert. Separate from buildAuthorAlert because:
+ *   • recipients are different (SEO ops, not the author or editorial editor),
+ *   • top issues are tech/infra not editorial craft,
+ *   • tone is "technical action item" not "please review your writing".
+ *
+ * Sent to editors who have the `'seo'` role when an article's
+ * seoScore drops below 80.
+ */
+export function buildSeoAlert(input: {
+  recipientName: string;
+  headline: string;
+  url: string;
+  seoScore: number;
+  topIssues: Array<{ title: string; message?: string }>;
+}): string {
+  const issues = input.topIssues
+    .slice(0, 5)
+    .map((i) => `• ${escape(i.message || i.title)}`)
+    .join("\n");
+
+  return [
+    `🔧 <b>SEO issues detected</b>`,
+    "",
+    `Hi ${escape(input.recipientName)} — flagging an article that scored <b>${input.seoScore}%</b> on the SEO checklist (target ≥80%).`,
+    "",
+    `<b>Article:</b> ${escape(input.headline)}`,
+    issues ? `\n<b>Top issues to fix:</b>\n${issues}` : "",
+    "",
+    `<a href="${escape(input.url)}">${escape(input.url)}</a>`,
+    "",
+    `— Patrika Editorial Insight`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 function escape(s: string): string {
   // Telegram HTML mode supports <b>, <i>, <a>. Escape every char that
   // could break out of either text content OR an attribute value —

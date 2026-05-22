@@ -1355,7 +1355,388 @@ export const rules: Rule[] = [
       return ok();
     },
   },
+
+  // ====================================================================
+  // ===== TIER 2 — SEO infrastructure (canonical, robots, redirect, ====
+  // =====           compression, caching, page weight, 3p scripts)  ====
+  // ====================================================================
+  {
+    id: "seo-canonical-self",
+    category: "seo",
+    scope: "seo",
+    title: "<link rel=\"canonical\"> must point at this page",
+    severity: "warning",
+    description:
+      "Each article should self-canonical. A canonical pointing somewhere else makes Google de-prioritise this URL in search and consolidates link equity on the target instead — usually unintentional after a CMS template change.",
+    reference: "Google Search Central — Canonical URLs.",
+    check: (a) => {
+      if (!a.canonical) return fail("No <link rel=\"canonical\"> on the page");
+      const norm = (u: string) => u.replace(/\/+$/, "").toLowerCase();
+      try {
+        const c = norm(new URL(a.canonical, a.url).toString());
+        const u = norm(a.url);
+        if (c !== u)
+          return fail(
+            "Canonical points to a different URL",
+            `Canonical: ${a.canonical}\nPage URL : ${a.url}`,
+          );
+      } catch {
+        return fail("Canonical href is malformed", a.canonical);
+      }
+      return ok();
+    },
+  },
+  {
+    id: "seo-no-noindex",
+    category: "seo",
+    scope: "seo",
+    title: "Robots meta must not include noindex",
+    severity: "error",
+    description:
+      "A live article tagged noindex is invisible to Google — usually a CMS mistake (a draft template that leaked into production). Detect early so it doesn't sit unindexed for days.",
+    reference: "Google Search Central — Robots meta tag specifications.",
+    check: (a) => {
+      const robots = a.robotsMeta ?? "";
+      if (/\bnoindex\b/i.test(robots))
+        return fail("Robots meta says 'noindex'", robots);
+      return ok();
+    },
+  },
+  {
+    id: "seo-no-nofollow",
+    category: "seo",
+    scope: "seo",
+    title: "Robots meta should not include nofollow",
+    severity: "warning",
+    description:
+      "A page-level nofollow tells Google not to follow ANY link on the page — including internal navigation. Almost always wrong on a news article.",
+    reference: "Google Search Central — Robots meta tag specifications.",
+    check: (a) => {
+      const robots = a.robotsMeta ?? "";
+      if (/\bnofollow\b/i.test(robots))
+        return fail("Robots meta says 'nofollow'", robots);
+      return ok();
+    },
+  },
+  {
+    id: "seo-no-redirects",
+    category: "seo",
+    scope: "seo",
+    title: "Article URL should not redirect",
+    severity: "warning",
+    description:
+      "Each redirect costs 100–300 ms before the page even starts rendering. The sitemap URL should resolve directly to the article. If you spot a redirect here, update the sitemap to the final URL.",
+    reference: "Google Search Central — Redirects and Google Search.",
+    check: (a) => {
+      if (a.redirected && a.finalUrl && a.finalUrl !== a.url)
+        return fail(
+          "Request was redirected",
+          `Sitemap URL: ${a.url}\nFinal URL  : ${a.finalUrl}`,
+        );
+      return ok();
+    },
+  },
+  {
+    id: "seo-image-modern-format",
+    category: "image",
+    scope: "seo",
+    title: "Body images should be WebP or AVIF",
+    severity: "warning",
+    description:
+      "WebP is ~30% smaller than JPEG, AVIF ~50% smaller. Serving JPEG/PNG on a news site wastes bandwidth on mobile users and slows LCP. The CMS should convert at upload time.",
+    reference:
+      "Google web.dev — Serve images in modern formats.",
+    check: (a) => {
+      if (a.images.length === 0) return ok();
+      const LEGACY = /\.(jpe?g|png|gif)(?:[?#].*)?$/i;
+      const legacy = a.images.filter((img) =>
+        LEGACY.test(img.filename || img.src || ""),
+      );
+      if (legacy.length === 0) return ok();
+      const list = legacy
+        .slice(0, 3)
+        .map((i) => i.filename || i.src)
+        .join("\n");
+      const more =
+        legacy.length > 3 ? `\n…and ${legacy.length - 3} more` : "";
+      return fail(
+        `${legacy.length}/${a.images.length} images in legacy format (JPEG/PNG/GIF)`,
+        `${list}${more}`,
+      );
+    },
+  },
+  {
+    id: "seo-cache-control",
+    category: "seo",
+    scope: "seo",
+    title: "HTML response should ship a Cache-Control header",
+    severity: "info",
+    description:
+      "An HTML response without Cache-Control falls back to whatever the CDN guesses. Even a short TTL (60–300s) cuts repeat-visit TTFB to near-zero for the same article. Hard 'no-store' on news pages is a configuration mistake — it forces every request to the origin.",
+    reference: "MDN — Cache-Control HTTP header.",
+    check: (a) => {
+      const cc = a.cacheControl ?? "";
+      if (!cc) return fail("No Cache-Control header on the HTML response");
+      if (/no-store/i.test(cc))
+        return fail(
+          "Cache-Control: no-store — every request hits origin",
+          cc,
+        );
+      return ok();
+    },
+  },
+  {
+    id: "seo-compression",
+    category: "seo",
+    scope: "seo",
+    title: "HTML response should be compressed (Brotli or Gzip)",
+    severity: "warning",
+    description:
+      "Uncompressed HTML wastes bandwidth and slows LCP. Brotli is ~20% smaller than Gzip; both are universally supported. Vercel/most modern CDNs enable Brotli by default — a missing header means the origin is serving directly.",
+    reference: "Google web.dev — Enable text compression.",
+    check: (a) => {
+      const enc = (a.contentEncoding ?? "").toLowerCase().trim();
+      if (!enc)
+        return fail(
+          "HTML response is not compressed (no Content-Encoding header)",
+        );
+      if (enc !== "br" && enc !== "gzip" && !enc.includes("br") && !enc.includes("gzip"))
+        return fail(`Unusual compression encoding: ${enc}`);
+      return ok();
+    },
+  },
+  {
+    id: "seo-third-party-scripts",
+    category: "seo",
+    scope: "seo",
+    title: "Limit third-party scripts loaded in <head>",
+    severity: "info",
+    description:
+      "Every external script in <head> blocks rendering until it resolves DNS and downloads. Analytics, ads, and chat widgets are the usual culprits. Aim to load them async or move them to the end of <body>.",
+    reference: "Google web.dev — Reduce the impact of third-party code.",
+    check: (a) => {
+      const n = a.thirdPartyScriptCount ?? 0;
+      if (n > 5) return fail(`${n} third-party scripts in <head> (>5)`);
+      return ok();
+    },
+  },
+  {
+    id: "seo-page-size",
+    category: "seo",
+    scope: "seo",
+    title: "Article HTML should be under 2 MB",
+    severity: "info",
+    description:
+      "HTML weight tracks how much data a mobile user downloads before any image. >2 MB usually means inlined ad payloads, base64'd images, or a template that ships every section's CSS even when not used.",
+    reference: "HTTP Archive — Median HTML transfer size.",
+    check: (a) => {
+      const bytes = a.htmlBytes ?? 0;
+      if (bytes === 0) return ok();
+      if (bytes > 2_000_000)
+        return fail(
+          `HTML is ${(bytes / 1_000_000).toFixed(1)} MB (>2 MB)`,
+          "Inspect for inlined ad payloads or unminified template HTML.",
+        );
+      return ok();
+    },
+  },
+
+  // ====================================================================
+  // ===== TIER 3 — Per-article perf + editorial-quality heuristics ====
+  // =====           (TTFB, render-blocking, fonts, AMP link,        ====
+  // =====            hyperlocal location, source attribution)       ====
+  // ====================================================================
+  {
+    id: "seo-ttfb",
+    category: "seo",
+    scope: "seo",
+    title: "Server TTFB should be under 800 ms",
+    severity: "warning",
+    description:
+      "Time to First Byte measures how fast the origin/CDN starts responding. Google's threshold: <800 ms good, 800–1800 ms needs work, >1800 ms poor. Measured server-to-server (this dashboard → patrika.com), so it's a trend signal, not the user-experienced number.",
+    reference: "Google web.dev — Time to First Byte (TTFB).",
+    check: (a) => {
+      const t = a.ttfbMs;
+      if (t === undefined || t === null) return ok();
+      if (t > 1800) return fail(`TTFB is ${t} ms (>1800 ms — poor)`);
+      if (t > 800) return fail(`TTFB is ${t} ms (>800 ms — needs improvement)`);
+      return ok();
+    },
+  },
+  {
+    id: "seo-render-blocking",
+    category: "seo",
+    scope: "seo",
+    title: "Limit render-blocking resources in <head>",
+    severity: "warning",
+    description:
+      "Synchronous <script> tags and unscoped <link rel='stylesheet'> in <head> block First Contentful Paint until they finish downloading. Use async/defer on scripts and inline critical CSS for above-the-fold styling.",
+    reference: "Google web.dev — Eliminate render-blocking resources.",
+    check: (a) => {
+      const scripts = a.renderBlockingScripts ?? 0;
+      const styles = a.renderBlockingStyles ?? 0;
+      const total = scripts + styles;
+      if (total > 3)
+        return fail(
+          `${total} render-blocking resources in <head>`,
+          `${scripts} sync scripts + ${styles} stylesheets`,
+        );
+      return ok();
+    },
+  },
+  {
+    id: "seo-font-loading",
+    category: "seo",
+    scope: "seo",
+    title: "Fonts should use preload + font-display: swap",
+    severity: "info",
+    description:
+      "Without font-display: swap, text is invisible until the font downloads (FOIT) — looks like a broken page on slow networks. Without <link rel='preload' as='font'>, the browser only discovers the font file after parsing the CSS, adding a round-trip.",
+    reference: "Google web.dev — Avoid invisible text during font loading.",
+    check: (a) => {
+      const swap = a.hasFontDisplaySwap ?? false;
+      const preload = a.fontPreloadCount ?? 0;
+      if (!swap && preload === 0)
+        return fail(
+          "No font-display: swap and no font preload — FOIT risk",
+          "Add font-display: swap to @font-face and <link rel='preload' as='font'> for key fonts.",
+        );
+      if (!swap)
+        return fail(
+          "No font-display: swap detected",
+          "Without swap, text is invisible until fonts download.",
+        );
+      return ok();
+    },
+  },
+  {
+    id: "seo-amp-link",
+    category: "seo",
+    scope: "seo",
+    title: "AMP variant should be linked from the canonical page",
+    severity: "info",
+    description:
+      "If Patrika still ships AMP for Top Stories carousel eligibility, the canonical page should declare its AMP twin via <link rel='amphtml'>. Missing link means Google can't pair the two and AMP traffic is lost.",
+    reference:
+      "AMP Project — Link to and from AMP pages.",
+    check: (a) => {
+      if (!a.ampUrl)
+        return fail("No <link rel='amphtml'> found on the canonical page");
+      return ok();
+    },
+  },
+  {
+    id: "seo-hyperlocal-location",
+    category: "seo",
+    scope: "seo",
+    title: "Hyperlocal stories must name the location in headline + lead",
+    severity: "warning",
+    description:
+      "Stories in city sections (jaipur-news, bhopal-news, lucknow-news, …) must contain the city's name (English or Hindi script) in BOTH the headline and the first paragraph. Improves Google entity recognition and ranking for 'CITY news' queries.",
+    reference: "Google News — Local news content guidelines.",
+    check: (a) => {
+      const cat = a.category;
+      if (!cat) return ok();
+      const city = HYPERLOCAL_CITY_NAMES[cat];
+      if (!city) return ok(); // Not a hyperlocal section we know about.
+      const intro =
+        a.paragraphs.find((p) => p.wordCount > 25)?.text ?? a.paragraphs[0]?.text ?? "";
+      const titleLower = (a.title ?? "").toLowerCase();
+      const introLower = intro.toLowerCase();
+      const enLower = city.en.toLowerCase();
+      const inTitle = titleLower.includes(enLower) || (a.title ?? "").includes(city.hi);
+      const inLead = introLower.includes(enLower) || intro.includes(city.hi);
+      if (!inTitle && !inLead)
+        return fail(
+          `City "${city.en}" / "${city.hi}" missing from headline AND lead`,
+        );
+      if (!inTitle)
+        return fail(`City "${city.en}" / "${city.hi}" missing from headline`);
+      if (!inLead)
+        return fail(`City "${city.en}" / "${city.hi}" missing from lead paragraph`);
+      return ok();
+    },
+  },
+  {
+    id: "seo-source-attribution",
+    category: "seo",
+    scope: "seo",
+    title: "Cited sources should be hyperlinked",
+    severity: "info",
+    description:
+      "When a story references 'a report', 'according to X', 'data shows', or 'के अनुसार', it should link to the original source. Unlinked claims weaken E-E-A-T and look thin to Google's quality evaluators.",
+    reference:
+      "Google Search Central — Helpful content and the E-E-A-T framework.",
+    check: (a) => {
+      const text = a.bodyText ?? "";
+      if (!text) return ok();
+      const ATTRIBUTION_MARKERS: RegExp[] = [
+        /according to\b/i,
+        /\breport\s+(?:says|said|claims|found)\b/i,
+        /\bstudy\s+(?:says|said|found|shows)\b/i,
+        /\bdata\s+shows?\b/i,
+        /\bके\s+अनुसार/u,
+        /\bकी\s+रिपोर्ट\s+के\s+अनुसार/u,
+        /\bने\s+कहा\s+कि/u,
+        /\bने\s+बताया\s+कि/u,
+      ];
+      const cites = ATTRIBUTION_MARKERS.some((re) => re.test(text));
+      if (!cites) return ok();
+      if (a.externalLinkCount > 0) return ok();
+      return fail(
+        "Article cites sources but has no external links to back them up",
+      );
+    },
+  },
 ];
+
+/**
+ * Section-slug → city-name mapping for the hyperlocal-location rule.
+ * Stored as a const map so a typo in a section slug fails the lookup
+ * loudly rather than silently passing every article.
+ *
+ * English name is the canonical Wikipedia spelling; Hindi is the
+ * spelling that actually appears in Patrika headlines (devanagari).
+ */
+const HYPERLOCAL_CITY_NAMES: Record<string, { en: string; hi: string }> = {
+  // Rajasthan
+  "jaipur-news": { en: "Jaipur", hi: "जयपुर" },
+  "udaipur-news": { en: "Udaipur", hi: "उदयपुर" },
+  "jodhpur-news": { en: "Jodhpur", hi: "जोधपुर" },
+  "ajmer-news": { en: "Ajmer", hi: "अजमेर" },
+  "kota-news": { en: "Kota", hi: "कोटा" },
+  "bikaner-news": { en: "Bikaner", hi: "बीकानेर" },
+  "alwar-news": { en: "Alwar", hi: "अलवर" },
+  "bhilwara-news": { en: "Bhilwara", hi: "भीलवाड़ा" },
+  "sikar-news": { en: "Sikar", hi: "सीकर" },
+  "pali-news": { en: "Pali", hi: "पाली" },
+  "barmer-news": { en: "Barmer", hi: "बाड़मेर" },
+  "chittorgarh-news": { en: "Chittorgarh", hi: "चित्तौड़गढ़" },
+  "sri-ganganagar-news": { en: "Sri Ganganagar", hi: "श्रीगंगानगर" },
+  // Madhya Pradesh
+  "bhopal-news": { en: "Bhopal", hi: "भोपाल" },
+  "indore-news": { en: "Indore", hi: "इंदौर" },
+  "gwalior-news": { en: "Gwalior", hi: "ग्वालियर" },
+  "ujjain-news": { en: "Ujjain", hi: "उज्जैन" },
+  "jabalpur-news": { en: "Jabalpur", hi: "जबलपुर" },
+  "rewa-news": { en: "Rewa", hi: "रीवा" },
+  "satna-news": { en: "Satna", hi: "सतना" },
+  "sagar-news": { en: "Sagar", hi: "सागर" },
+  // Uttar Pradesh
+  "lucknow-news": { en: "Lucknow", hi: "लखनऊ" },
+  "kanpur-news": { en: "Kanpur", hi: "कानपुर" },
+  "varanasi-news": { en: "Varanasi", hi: "वाराणसी" },
+  "prayagraj-news": { en: "Prayagraj", hi: "प्रयागराज" },
+  "agra-news": { en: "Agra", hi: "आगरा" },
+  "meerut-news": { en: "Meerut", hi: "मेरठ" },
+  // Chhattisgarh
+  "raipur-news": { en: "Raipur", hi: "रायपुर" },
+  "bilaspur-news": { en: "Bilaspur", hi: "बिलासपुर" },
+  // Bihar / Jharkhand / Uttarakhand
+  "patna-news": { en: "Patna", hi: "पटना" },
+  "ranchi-news": { en: "Ranchi", hi: "रांची" },
+  "dehradun-news": { en: "Dehradun", hi: "देहरादून" },
+};
 
 /**
  * Run every rule against an article, optionally skipping any rule whose

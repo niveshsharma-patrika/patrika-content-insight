@@ -15,11 +15,26 @@ import { getDb } from "./db";
  * same article.
  */
 
+/**
+ * Which kind of nudge an editor wants to receive.
+ *
+ *   • `editorial` — fires when editorialScore < 80 (existing behavior:
+ *     headline, intro, image alt, word count, etc.)
+ *   • `seo` — fires when seoScore < 80 (new: redirects, compression,
+ *     cache headers, TTFB, AMP, etc.)
+ *
+ * An editor can have one or both. Storage is a TEXT[] in Postgres;
+ * legacy rows without the column default to `['editorial']` so we
+ * don't silently retarget anyone when the migration applies.
+ */
+export type EditorRole = "editorial" | "seo";
+
 export type Editor = {
   id: string;
   name: string;
   telegramChatId: string;
   active: boolean;
+  roles: EditorRole[];
   notes?: string;
   createdAt: string;
   updatedAt: string;
@@ -30,10 +45,24 @@ type Row = {
   name: string;
   telegram_chat_id: string;
   active: boolean | null;
+  roles: string[] | null;
   notes: string | null;
   created_at: string;
   updated_at: string;
 };
+
+function normalizeRoles(raw: string[] | null | undefined): EditorRole[] {
+  if (!raw || raw.length === 0) return ["editorial"];
+  const out: EditorRole[] = [];
+  for (const r of raw) {
+    if (r === "editorial" || r === "seo") {
+      if (!out.includes(r)) out.push(r);
+    }
+  }
+  // An editor with zero valid roles is pointless — default to
+  // editorial so they still receive something rather than nothing.
+  return out.length > 0 ? out : ["editorial"];
+}
 
 function fromRow(r: Row): Editor {
   return {
@@ -41,6 +70,7 @@ function fromRow(r: Row): Editor {
     name: r.name,
     telegramChatId: r.telegram_chat_id,
     active: r.active ?? true,
+    roles: normalizeRoles(r.roles),
     notes: r.notes ?? undefined,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
@@ -71,8 +101,18 @@ export type UpsertEditorInput = {
   name: string;
   telegramChatId: string;
   active?: boolean;
+  /** At least one role must be selected — defaults to ['editorial']. */
+  roles?: EditorRole[];
   notes?: string;
 };
+
+function sanitizeRoles(
+  raw: EditorRole[] | undefined,
+): EditorRole[] | undefined {
+  if (!raw) return undefined;
+  const cleaned = normalizeRoles(raw);
+  return cleaned;
+}
 
 export async function upsertEditor(input: UpsertEditorInput): Promise<Editor> {
   const db = getDb();
@@ -102,10 +142,12 @@ export async function upsertEditor(input: UpsertEditorInput): Promise<Editor> {
       .maybeSingle();
     if (selErr || !existing) throw new Error("Editor not found");
     const prev = existing as Row;
+    const cleanRoles = sanitizeRoles(input.roles);
     const update = {
       name: name || prev.name,
       telegram_chat_id: chatId || prev.telegram_chat_id,
       active: input.active ?? prev.active ?? true,
+      roles: cleanRoles ?? prev.roles ?? ["editorial"],
       notes:
         input.notes === undefined ? prev.notes : input.notes.trim() || null,
       updated_at: now,
@@ -125,6 +167,7 @@ export async function upsertEditor(input: UpsertEditorInput): Promise<Editor> {
     name,
     telegram_chat_id: chatId,
     active: input.active ?? true,
+    roles: sanitizeRoles(input.roles) ?? ["editorial"],
     notes: input.notes?.trim() || null,
     created_at: now,
     updated_at: now,
