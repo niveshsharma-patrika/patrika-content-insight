@@ -1,5 +1,8 @@
+"use client";
+
 import Link from "next/link";
 import Image from "next/image";
+import { usePathname } from "next/navigation";
 
 /**
  * Minimal masthead.
@@ -10,8 +13,13 @@ import Image from "next/image";
  *
  * Anything else (rule catalog, article detail) is reached by clicking
  * through from one of those two places.
+ *
+ * Hidden on /login because the visitor is unauthenticated and the
+ * masthead links would just bounce them right back to /login.
  */
 export function HeaderNav() {
+  const pathname = usePathname();
+  if (pathname === "/login") return null;
   return (
     <header className="border-b bg-card">
       <div className="mx-auto max-w-7xl px-6 h-16 flex items-center justify-between">

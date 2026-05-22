@@ -5,6 +5,7 @@ import { EditorManager } from "@/components/EditorManager";
 import { SectionManager } from "@/components/SectionManager";
 import { CronHistory } from "@/components/CronHistory";
 import { GeminiUsage } from "@/components/GeminiUsage";
+import { LogoutButton } from "@/components/LogoutButton";
 import { listUsers } from "@/lib/users";
 import { listEditors } from "@/lib/editors";
 import { listSections } from "@/lib/sections";
@@ -52,7 +53,10 @@ export default async function SettingsPage() {
       </Link>
 
       <header className="space-y-1">
-        <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
+        <div className="flex items-baseline justify-between gap-3 flex-wrap">
+          <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
+          <LogoutButton />
+        </div>
         <p className="text-sm text-muted">
           Authors directory and the rule catalog used to score every
           article.
