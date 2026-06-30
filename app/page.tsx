@@ -2,6 +2,7 @@ import { getDayDashboard } from "@/lib/analyze";
 import { ComplianceSection } from "@/components/ComplianceSection";
 import { CoreWebVitals } from "@/components/CoreWebVitals";
 import { DailyIssuesChart } from "@/components/DailyIssuesChart";
+import { DashboardKpis } from "@/components/DashboardKpis";
 import { DatePicker } from "@/components/DatePicker";
 import { readLatestCwvReports } from "@/lib/cwv";
 import { readRecentSnapshots } from "@/lib/dashboardStats";
@@ -70,68 +71,94 @@ export default async function Page({
   const lastTickRel = dashboard.lastCronTickAt
     ? formatRelative(dashboard.lastCronTickAt)
     : null;
+  // Articles still below the editorial bar — the "needs attention" count.
+  const needsAttention = dashboard.articles.filter(
+    (a) => a.ok && a.editorialScore < 80,
+  ).length;
 
   return (
-    <div className="mx-auto max-w-7xl px-6 py-8 space-y-8">
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div className="min-w-0 space-y-3">
-          <h1 className="text-2xl font-semibold tracking-tight">
-            {dayHeaderLabel(istDate)}
-            {!isToday ? (
-              <span className="ml-2 text-xs font-normal text-muted">
-                (archive)
-              </span>
-            ) : null}
-          </h1>
-          <DatePicker activeDate={istDate} />
-          <p className="text-sm text-muted">
-            <span className="font-mono tabular-nums">
-              {dashboard.totalForDate.toLocaleString()}
-            </span>
-            {sitemapTotal > dashboard.totalForDate ? (
-              <>
-                {" "}
-                of{" "}
-                <span className="font-mono tabular-nums">
-                  {sitemapTotal.toLocaleString()}
+    <div className="mx-auto max-w-7xl px-6 py-7 space-y-6">
+      {/* === HEADER === */}
+      <header className="rounded-2xl border bg-card px-5 py-5 sm:px-6">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="min-w-0">
+            <p className="text-[11px] uppercase tracking-wider text-muted font-medium">
+              Editorial QA · patrika.com
+            </p>
+            <h1 className="mt-1 text-2xl font-semibold tracking-tight flex items-center gap-2 flex-wrap">
+              {dayHeaderLabel(istDate)}
+              {!isToday ? (
+                <span className="rounded-full bg-stone-100 text-stone-600 px-2 py-0.5 text-[11px] font-medium">
+                  archive
                 </span>
-              </>
-            ) : null}{" "}
-            articles scraped
-            {isToday ? " today" : ""}
+              ) : null}
+            </h1>
+          </div>
+
+          {/* Status pills (scrape freshness, fetch failures) */}
+          <div className="flex items-center gap-2 flex-wrap text-xs">
+            <span className="inline-flex items-center gap-1.5 rounded-full border bg-stone-50 px-2.5 py-1">
+              <span className="font-mono tabular-nums font-medium text-foreground">
+                {dashboard.totalForDate.toLocaleString()}
+              </span>
+              {sitemapTotal > dashboard.totalForDate ? (
+                <span className="text-muted">
+                  / {sitemapTotal.toLocaleString()}
+                </span>
+              ) : null}
+              <span className="text-muted">scraped{isToday ? " today" : ""}</span>
+            </span>
             {isToday ? (
-              <>
-                {" · "}
-                {lastTickRel ? (
-                  <span suppressHydrationWarning>
-                    last cron tick {lastTickRel}
-                  </span>
-                ) : (
-                  <span className="text-amber-700">no cron tick yet</span>
-                )}
-              </>
+              lastTickRel ? (
+                <span
+                  className="inline-flex items-center gap-1.5 rounded-full border bg-stone-50 px-2.5 py-1 text-muted"
+                  suppressHydrationWarning
+                >
+                  <span className="size-1.5 rounded-full bg-emerald-500" />
+                  cron {lastTickRel}
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-amber-700">
+                  <span className="size-1.5 rounded-full bg-amber-500" />
+                  no cron tick yet
+                </span>
+              )
             ) : null}
             {dashboard.failedToFetch > 0 ? (
-              <>
-                {" · "}
-                <span className="text-red-700">
-                  {dashboard.failedToFetch} fetch failed
-                </span>
-              </>
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-red-200 bg-red-50 px-2.5 py-1 text-red-700">
+                {dashboard.failedToFetch} fetch failed
+              </span>
             ) : null}
-          </p>
+          </div>
         </div>
+
+        <div className="mt-4 border-t pt-4">
+          <DatePicker activeDate={istDate} />
+        </div>
+      </header>
+
+      {/* === KPI STRIP (today's health at a glance) === */}
+      {dashboard.totalForDate > 0 ? (
+        <DashboardKpis
+          analyzed={summary.analyzed}
+          totalForDate={dashboard.totalForDate}
+          avgEditorial={summary.averageEditorialScore}
+          avgSeo={summary.averageSeoScore}
+          needsAttention={needsAttention}
+          errors={summary.errors}
+          warnings={summary.warnings}
+        />
+      ) : null}
+
+      {/* === TRENDS: daily issues + core web vitals (side by side on wide) === */}
+      <div className="grid gap-6 xl:grid-cols-2 items-start">
+        <DailyIssuesChart snapshots={recentSnapshots} />
+        <CoreWebVitals reports={cwvReports} />
       </div>
-
-      {/* === DAILY ISSUES TREND === */}
-      <DailyIssuesChart snapshots={recentSnapshots} />
-
-      {/* === CORE WEB VITALS (global, latest nightly run) === */}
-      <CoreWebVitals reports={cwvReports} />
 
       {/* === ISSUES + ARTICLES === */}
       {dashboard.totalForDate === 0 ? (
-        <div className="rounded-xl border bg-card p-12 text-center space-y-3">
+        <div className="rounded-2xl border bg-card p-12 text-center space-y-3">
           <p className="text-sm font-medium">
             {isToday
               ? "Nothing scraped yet for today."
