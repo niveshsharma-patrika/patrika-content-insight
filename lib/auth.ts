@@ -195,6 +195,20 @@ export async function verifySessionCookieValue(
 }
 
 /**
+ * Whether to attach the `Secure` flag. Normally yes in production, but a
+ * Secure cookie is silently dropped by the browser over plain HTTP — so
+ * when the app is reached over bare HTTP (e.g. a direct IP:port deploy
+ * with no TLS/Cloudflare in front), set `COOKIE_INSECURE=1` to omit it.
+ * Remove that env var once HTTPS (Cloudflare/cert) terminates in front.
+ */
+function useSecureCookie(): boolean {
+  return (
+    process.env.NODE_ENV === "production" &&
+    process.env.COOKIE_INSECURE !== "1"
+  );
+}
+
+/**
  * Serialize a Set-Cookie value with the right flags for the
  * environment. Server-side use only (proxy + route handlers).
  */
@@ -206,10 +220,7 @@ export function buildSetCookieHeader(value: string): string {
     `SameSite=Lax`,
     `Max-Age=${COOKIE_MAX_AGE_SECONDS}`,
   ];
-  // Localhost doesn't run over HTTPS, so the Secure flag would prevent
-  // the cookie from being stored at all in dev. Detect via NODE_ENV
-  // — Vercel sets it to "production" in prod / preview.
-  if (process.env.NODE_ENV === "production") flags.push("Secure");
+  if (useSecureCookie()) flags.push("Secure");
   return flags.join("; ");
 }
 
@@ -221,7 +232,7 @@ export function buildClearCookieHeader(): string {
     `SameSite=Lax`,
     `Max-Age=0`,
   ];
-  if (process.env.NODE_ENV === "production") flags.push("Secure");
+  if (useSecureCookie()) flags.push("Secure");
   return flags.join("; ");
 }
 

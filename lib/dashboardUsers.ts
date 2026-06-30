@@ -74,14 +74,24 @@ export async function authenticateUser(
   password: string,
 ): Promise<{ user: string; role: Role } | null> {
   if (getPool()) {
-    const row = await sqlOne<UserRow>(
-      `SELECT id, username, password_hash, role, active, created_at
-       FROM dashboard_users
-       WHERE username = $1 AND active = true`,
-      [username],
-    );
-    if (row && verifyPassword(password, row.password_hash)) {
-      return { user: row.username, role: rowToUser(row).role };
+    try {
+      const row = await sqlOne<UserRow>(
+        `SELECT id, username, password_hash, role, active, created_at
+         FROM dashboard_users
+         WHERE username = $1 AND active = true`,
+        [username],
+      );
+      if (row && verifyPassword(password, row.password_hash)) {
+        return { user: row.username, role: rowToUser(row).role };
+      }
+    } catch (err) {
+      // DB unreachable (e.g. firewall, outage). Don't fail the login —
+      // fall through to the env break-glass admin so the owner is never
+      // locked out, which is the entire point of the break-glass.
+      console.error(
+        "[auth] dashboard_users lookup failed; falling back to env admin:",
+        err instanceof Error ? err.message : String(err),
+      );
     }
   }
 
