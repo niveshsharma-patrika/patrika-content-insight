@@ -16,7 +16,7 @@
  *   for production.
  */
 
-import { getDb } from "./db";
+import { sql, exec, getPool } from "./db";
 
 const PSI_ENDPOINT =
   "https://www.googleapis.com/pagespeedonline/v5/runPagespeed";
@@ -139,31 +139,54 @@ function round2(v: unknown): number | null {
  * re-run on the same day overwrites rather than duplicates.
  */
 export async function writeCwvReport(report: CwvReport): Promise<void> {
-  const db = getDb();
-  if (!db) return;
-  const { error } = await db.from("cwv_reports").upsert(
-    {
-      ist_date: report.istDate,
-      page_type: report.pageType,
-      strategy: report.strategy,
-      url: report.url,
-      performance_score: report.performanceScore,
-      lcp_ms: report.lcpMs,
-      cls: report.cls,
-      fcp_ms: report.fcpMs,
-      tbt_ms: report.tbtMs,
-      speed_index_ms: report.speedIndexMs,
-      ttfb_ms: report.ttfbMs,
-      field_lcp_ms: report.fieldLcpMs,
-      field_inp_ms: report.fieldInpMs,
-      field_cls: report.fieldCls,
-      field_overall: report.fieldOverall,
-      error: report.error,
-    },
-    { onConflict: "ist_date,page_type,strategy" },
-  );
-  if (error) {
-    console.warn("[cwv] writeCwvReport failed:", error.message);
+  if (!getPool()) return;
+  try {
+    await exec(
+      `INSERT INTO cwv_reports (
+         ist_date, page_type, strategy, url,
+         performance_score, lcp_ms, cls, fcp_ms, tbt_ms, speed_index_ms,
+         ttfb_ms, field_lcp_ms, field_inp_ms, field_cls, field_overall, error
+       ) VALUES (
+         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16
+       )
+       ON CONFLICT (ist_date, page_type, strategy) DO UPDATE SET
+         url = EXCLUDED.url,
+         performance_score = EXCLUDED.performance_score,
+         lcp_ms = EXCLUDED.lcp_ms,
+         cls = EXCLUDED.cls,
+         fcp_ms = EXCLUDED.fcp_ms,
+         tbt_ms = EXCLUDED.tbt_ms,
+         speed_index_ms = EXCLUDED.speed_index_ms,
+         ttfb_ms = EXCLUDED.ttfb_ms,
+         field_lcp_ms = EXCLUDED.field_lcp_ms,
+         field_inp_ms = EXCLUDED.field_inp_ms,
+         field_cls = EXCLUDED.field_cls,
+         field_overall = EXCLUDED.field_overall,
+         error = EXCLUDED.error`,
+      [
+        report.istDate,
+        report.pageType,
+        report.strategy,
+        report.url,
+        report.performanceScore,
+        report.lcpMs,
+        report.cls,
+        report.fcpMs,
+        report.tbtMs,
+        report.speedIndexMs,
+        report.ttfbMs,
+        report.fieldLcpMs,
+        report.fieldInpMs,
+        report.fieldCls,
+        report.fieldOverall,
+        report.error,
+      ],
+    );
+  } catch (err) {
+    console.error(
+      "[cwv] writeCwvReport failed:",
+      err instanceof Error ? err.message : String(err),
+    );
   }
 }
 
@@ -173,48 +196,40 @@ export async function writeCwvReport(report: CwvReport): Promise<void> {
  * article/desktop. Used by the dashboard home page.
  */
 export async function readLatestCwvReports(): Promise<CwvReport[]> {
-  const db = getDb();
-  if (!db) return [];
-  // Pull the most recent rows and keep the first seen per group. The
-  // table is tiny (≤ a handful of rows per day, 7-day retention), so a
-  // bounded fetch + in-memory dedup is simpler than a window query.
-  const { data, error } = await db
-    .from("cwv_reports")
-    .select("*")
-    .order("ist_date", { ascending: false })
-    .order("created_at", { ascending: false })
-    .limit(60);
-  if (error || !data) {
-    if (error) console.warn("[cwv] readLatestCwvReports failed:", error.message);
+  if (!getPool()) return [];
+  try {
+    // Newest row per (page_type, strategy) via Postgres DISTINCT ON.
+    const rows = await sql<CwvRow>(
+      `SELECT DISTINCT ON (page_type, strategy) *
+         FROM cwv_reports
+        ORDER BY page_type, strategy, ist_date DESC, created_at DESC`,
+    );
+    return rows.map(rowToReport);
+  } catch (err) {
+    console.error(
+      "[cwv] readLatestCwvReports failed:",
+      err instanceof Error ? err.message : String(err),
+    );
     return [];
   }
-  const seen = new Set<string>();
-  const out: CwvReport[] = [];
-  for (const r of data as CwvRow[]) {
-    const k = `${r.page_type}:${r.strategy}`;
-    if (seen.has(k)) continue;
-    seen.add(k);
-    out.push(rowToReport(r));
-  }
-  return out;
 }
 
 /** Delete reports older than the retention window (matches articles). */
 export async function purgeCwvReportsOlderThan(
   cutoffIstDate: string,
 ): Promise<number> {
-  const db = getDb();
-  if (!db) return 0;
-  const { data, error } = await db
-    .from("cwv_reports")
-    .delete()
-    .lt("ist_date", cutoffIstDate)
-    .select("id");
-  if (error) {
-    console.warn("[cwv] purge failed:", error.message);
+  if (!getPool()) return 0;
+  try {
+    return await exec(`DELETE FROM cwv_reports WHERE ist_date < $1`, [
+      cutoffIstDate,
+    ]);
+  } catch (err) {
+    console.error(
+      "[cwv] purge failed:",
+      err instanceof Error ? err.message : String(err),
+    );
     return 0;
   }
-  return data?.length ?? 0;
 }
 
 function rowToReport(r: CwvRow): CwvReport {

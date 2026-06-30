@@ -1,4 +1,4 @@
-import { getDb } from "./db";
+import { sql, sqlOne, exec, getPool } from "./db";
 
 /**
  * Per-day rolled-up stats. Written by the cron at the end of each tick
@@ -48,15 +48,13 @@ const SNAPSHOT_COLS =
 export async function readDailySnapshot(
   istDate: string,
 ): Promise<DailySnapshot | null> {
-  const db = getDb();
-  if (!db) return null;
-  const { data, error } = await db
-    .from("daily_snapshots")
-    .select(SNAPSHOT_COLS)
-    .eq("date", istDate)
-    .maybeSingle();
-  if (error || !data) return null;
-  return rowToSnapshot(data as SnapshotRow);
+  if (!getPool()) return null;
+  const row = await sqlOne<SnapshotRow>(
+    `SELECT ${SNAPSHOT_COLS} FROM daily_snapshots WHERE date = $1`,
+    [istDate],
+  );
+  if (!row) return null;
+  return rowToSnapshot(row);
 }
 
 /**
@@ -66,15 +64,13 @@ export async function readDailySnapshot(
 export async function readRecentSnapshots(
   limit: number = 7,
 ): Promise<DailySnapshot[]> {
-  const db = getDb();
-  if (!db) return [];
-  const { data, error } = await db
-    .from("daily_snapshots")
-    .select(SNAPSHOT_COLS)
-    .order("date", { ascending: false })
-    .limit(limit);
-  if (error || !data) return [];
-  return (data as SnapshotRow[]).map(rowToSnapshot).reverse();
+  if (!getPool()) return [];
+  const rows = await sql<SnapshotRow>(
+    `SELECT ${SNAPSHOT_COLS} FROM daily_snapshots
+     ORDER BY date DESC LIMIT $1`,
+    [limit],
+  );
+  return rows.map(rowToSnapshot).reverse();
 }
 
 /**
@@ -93,21 +89,27 @@ export async function updateDailySnapshotAggregates(
     avgSeoScore: number;
   },
 ): Promise<void> {
-  const db = getDb();
-  if (!db) return;
-  const { error } = await db
-    .from("daily_snapshots")
-    .update({
-      total_errors: agg.errors,
-      total_warnings: agg.warnings,
-      avg_editorial_score: agg.avgEditorialScore,
-      avg_seo_score: agg.avgSeoScore,
-    })
-    .eq("date", istDate);
-  if (error) {
+  if (!getPool()) return;
+  try {
+    await exec(
+      `UPDATE daily_snapshots SET
+         total_errors = $1,
+         total_warnings = $2,
+         avg_editorial_score = $3,
+         avg_seo_score = $4
+       WHERE date = $5`,
+      [
+        agg.errors,
+        agg.warnings,
+        agg.avgEditorialScore,
+        agg.avgSeoScore,
+        istDate,
+      ],
+    );
+  } catch (err) {
     console.error(
       "[dashboardStats.updateDailySnapshotAggregates] failed:",
-      error.message,
+      err instanceof Error ? err.message : String(err),
     );
   }
 }
@@ -120,20 +122,18 @@ export async function updateDailySnapshotAggregates(
 export async function purgeSnapshotsOlderThan(
   cutoffIstDate: string,
 ): Promise<number> {
-  const db = getDb();
-  if (!db) return 0;
-  const { error, count } = await db
-    .from("daily_snapshots")
-    .delete({ count: "exact" })
-    .lt("date", cutoffIstDate);
-  if (error) {
+  if (!getPool()) return 0;
+  try {
+    return await exec(`DELETE FROM daily_snapshots WHERE date < $1`, [
+      cutoffIstDate,
+    ]);
+  } catch (err) {
     console.error(
       "[dashboardStats.purgeSnapshotsOlderThan] failed:",
-      error.message,
+      err instanceof Error ? err.message : String(err),
     );
     return 0;
   }
-  return count ?? 0;
 }
 
 /**
@@ -143,39 +143,38 @@ export async function purgeSnapshotsOlderThan(
 export async function purgeCronRunsOlderThan(
   cutoffIstDate: string,
 ): Promise<number> {
-  const db = getDb();
-  if (!db) return 0;
+  if (!getPool()) return 0;
   const cutoffIso = `${cutoffIstDate}T00:00:00+05:30`;
-  const { error, count } = await db
-    .from("cron_runs")
-    .delete({ count: "exact" })
-    .lt("started_at", cutoffIso);
-  if (error) {
+  try {
+    return await exec(`DELETE FROM cron_runs WHERE started_at < $1`, [
+      cutoffIso,
+    ]);
+  } catch (err) {
     console.error(
       "[dashboardStats.purgeCronRunsOlderThan] failed:",
-      error.message,
+      err instanceof Error ? err.message : String(err),
     );
     return 0;
   }
-  return count ?? 0;
 }
 
 export async function writeDailySnapshot(
   istDate: string,
   totalArticles: number,
 ): Promise<void> {
-  const db = getDb();
-  if (!db) return;
-  const { error } = await db
-    .from("daily_snapshots")
-    .upsert(
-      { date: istDate, total_articles: totalArticles },
-      { onConflict: "date" },
+  if (!getPool()) return;
+  try {
+    await exec(
+      `INSERT INTO daily_snapshots (date, total_articles)
+       VALUES ($1, $2)
+       ON CONFLICT (date) DO UPDATE SET
+         total_articles = EXCLUDED.total_articles`,
+      [istDate, totalArticles],
     );
-  if (error) {
+  } catch (err) {
     console.error(
       "[dashboardStats.writeDailySnapshot] upsert failed:",
-      error.message,
+      err instanceof Error ? err.message : String(err),
     );
   }
 }
@@ -207,15 +206,8 @@ export type CronRunRow = {
 };
 
 export async function listCronRuns(limit: number = 50): Promise<CronRunRow[]> {
-  const db = getDb();
-  if (!db) return [];
-  const { data, error } = await db
-    .from("cron_runs")
-    .select("id,started_at,finished_at,scraped,errors,status,notes")
-    .order("started_at", { ascending: false })
-    .limit(limit);
-  if (error || !data) return [];
-  return (data as Array<{
+  if (!getPool()) return [];
+  const rows = await sql<{
     id: number;
     started_at: string;
     finished_at: string | null;
@@ -223,7 +215,13 @@ export async function listCronRuns(limit: number = 50): Promise<CronRunRow[]> {
     errors: number | null;
     status: string | null;
     notes: string | null;
-  }>).map((r) => ({
+  }>(
+    `SELECT id,started_at,finished_at,scraped,errors,status,notes
+     FROM cron_runs
+     ORDER BY started_at DESC LIMIT $1`,
+    [limit],
+  );
+  return rows.map((r) => ({
     id: r.id,
     startedAt: r.started_at,
     finishedAt: r.finished_at,
@@ -242,23 +240,20 @@ export async function listCronRuns(limit: number = 50): Promise<CronRunRow[]> {
  * one.
  */
 export async function readLastCronRun(): Promise<LastCronRun | null> {
-  const db = getDb();
-  if (!db) return null;
-  const { data, error } = await db
-    .from("cron_runs")
-    .select("started_at,finished_at,status,scraped,errors")
-    .neq("status", "running")
-    .order("started_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (error || !data) return null;
-  const r = data as {
+  if (!getPool()) return null;
+  const r = await sqlOne<{
     started_at: string;
     finished_at: string | null;
     status: string | null;
     scraped: number | null;
     errors: number | null;
-  };
+  }>(
+    `SELECT started_at,finished_at,status,scraped,errors
+     FROM cron_runs
+     WHERE status <> 'running'
+     ORDER BY started_at DESC LIMIT 1`,
+  );
+  if (!r) return null;
   return {
     startedAt: r.started_at,
     finishedAt: r.finished_at,

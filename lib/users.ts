@@ -1,4 +1,4 @@
-import { getDb } from "./db";
+import { sql, sqlOne, exec, getPool } from "./db";
 
 export type User = {
   id: string;
@@ -41,14 +41,19 @@ function genId(): string {
 }
 
 export async function listUsers(): Promise<User[]> {
-  const db = getDb();
-  if (!db) return [];
-  const { data, error } = await db
-    .from("app_users")
-    .select("*")
-    .order("created_at", { ascending: true });
-  if (error || !data) return [];
-  return (data as Row[]).map(fromRow);
+  if (!getPool()) return [];
+  try {
+    const rows = await sql<Row>(
+      `SELECT * FROM app_users ORDER BY created_at ASC`,
+    );
+    return rows.map(fromRow);
+  } catch (err) {
+    console.error(
+      "[users.listUsers] select failed:",
+      err instanceof Error ? err.message : String(err),
+    );
+    return [];
+  }
 }
 
 export type UpsertUserInput = {
@@ -80,24 +85,26 @@ function normalizeChatId(raw: string | undefined): string | null {
 }
 
 export async function upsertUser(input: UpsertUserInput): Promise<User> {
-  const db = getDb();
-  if (!db) throw new Error("Database not configured");
+  if (!getPool()) throw new Error("Database not configured");
   const cleanAliases = (input.aliases ?? [])
     .map((a) => a.trim())
     .filter(Boolean);
   const now = new Date().toISOString();
 
   if (input.id) {
-    const { data: existing, error: selErr } = await db
-      .from("app_users")
-      .select("*")
-      .eq("id", input.id)
-      .maybeSingle();
-    if (selErr || !existing) throw new Error("User not found");
-    const prev = existing as Row;
+    // `aliases` is JSONB → already parsed to an array on read.
+    const prev = await sqlOne<Row>(
+      `SELECT * FROM app_users WHERE id = $1`,
+      [input.id],
+    );
+    if (!prev) throw new Error("User not found");
     const update = {
       name: input.name.trim() || prev.name,
-      aliases: cleanAliases.length ? cleanAliases : prev.aliases,
+      aliases: cleanAliases.length
+        ? cleanAliases
+        : Array.isArray(prev.aliases)
+          ? prev.aliases
+          : [],
       telegram_chat_id:
         input.telegramChatId === undefined
           ? prev.telegram_chat_id
@@ -109,14 +116,29 @@ export async function upsertUser(input: UpsertUserInput): Promise<User> {
           : input.notes.trim() || null,
       updated_at: now,
     };
-    const { data, error } = await db
-      .from("app_users")
-      .update(update)
-      .eq("id", input.id)
-      .select("*")
-      .single();
-    if (error || !data) throw new Error(error?.message ?? "Update failed");
-    return fromRow(data as Row);
+    // JSONB aliases written via $N::jsonb cast on a JSON.stringify'd value.
+    const row = await sqlOne<Row>(
+      `UPDATE app_users SET
+         name = $2,
+         aliases = $3::jsonb,
+         telegram_chat_id = $4,
+         active = $5,
+         notes = $6,
+         updated_at = $7
+       WHERE id = $1
+       RETURNING *`,
+      [
+        input.id,
+        update.name,
+        JSON.stringify(update.aliases),
+        update.telegram_chat_id,
+        update.active,
+        update.notes,
+        update.updated_at,
+      ],
+    );
+    if (!row) throw new Error("Update failed");
+    return fromRow(row);
   }
 
   const insert = {
@@ -129,19 +151,38 @@ export async function upsertUser(input: UpsertUserInput): Promise<User> {
     created_at: now,
     updated_at: now,
   };
-  const { data, error } = await db
-    .from("app_users")
-    .insert(insert)
-    .select("*")
-    .single();
-  if (error || !data) throw new Error(error?.message ?? "Insert failed");
-  return fromRow(data as Row);
+  const row = await sqlOne<Row>(
+    `INSERT INTO app_users (
+       id, name, aliases, telegram_chat_id, active, notes, created_at, updated_at
+     ) VALUES (
+       $1, $2, $3::jsonb, $4, $5, $6, $7, $8
+     )
+     RETURNING *`,
+    [
+      insert.id,
+      insert.name,
+      JSON.stringify(insert.aliases),
+      insert.telegram_chat_id,
+      insert.active,
+      insert.notes,
+      insert.created_at,
+      insert.updated_at,
+    ],
+  );
+  if (!row) throw new Error("Insert failed");
+  return fromRow(row);
 }
 
 export async function deleteUser(id: string): Promise<void> {
-  const db = getDb();
-  if (!db) return;
-  await db.from("app_users").delete().eq("id", id);
+  if (!getPool()) return;
+  try {
+    await exec(`DELETE FROM app_users WHERE id = $1`, [id]);
+  } catch (err) {
+    console.error(
+      "[users.deleteUser] delete failed:",
+      err instanceof Error ? err.message : String(err),
+    );
+  }
 }
 
 /**
@@ -206,8 +247,7 @@ export async function findUserForByline(
 export async function ensureUsersForBylines(
   bylines: Array<string | undefined>,
 ): Promise<{ created: number; matched: number; skipped: number }> {
-  const db = getDb();
-  if (!db) return { created: 0, matched: 0, skipped: 0 };
+  if (!getPool()) return { created: 0, matched: 0, skipped: 0 };
 
   const cleanedSet = new Set<string>();
   let skipped = 0;

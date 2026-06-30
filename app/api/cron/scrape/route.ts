@@ -7,7 +7,7 @@ import {
   purgeArticlesOlderThan,
   writeArticle,
 } from "@/lib/articleStore";
-import { getDb } from "@/lib/db";
+import { isDbConfigured, sqlOne, exec, isUniqueViolation } from "@/lib/db";
 import { checkSlugsWithGemini } from "@/lib/gemini";
 import { ensureUsersForBylines, findUsersForBylines } from "@/lib/users";
 import { listEditors } from "@/lib/editors";
@@ -81,8 +81,7 @@ async function run(req: Request) {
     return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
   }
 
-  const db = getDb();
-  if (!db) {
+  if (!isDbConfigured()) {
     return NextResponse.json(
       { ok: false, error: "DB not configured" },
       { status: 500 },
@@ -96,37 +95,35 @@ async function run(req: Request) {
   const lockCutoff = new Date(
     Date.now() - LOCK_STALE_MIN * 60 * 1000,
   ).toISOString();
-  await db
-    .from("cron_runs")
-    .update({
-      status: "crashed",
-      finished_at: new Date().toISOString(),
-      notes: "[stale running row swept on next-tick lock check]",
-    })
-    .eq("status", "running")
-    .lt("started_at", lockCutoff);
+  await exec(
+    `UPDATE cron_runs
+       SET status = 'crashed',
+           finished_at = $1,
+           notes = '[stale running row swept on next-tick lock check]'
+     WHERE status = 'running' AND started_at < $2`,
+    [new Date().toISOString(), lockCutoff],
+  );
 
   // ---- Lock: insert a fresh 'running' row.
   //      A unique partial index (idx_cron_runs_only_one_running) makes
-  //      this fail with a duplicate-key error if another tick already
-  //      holds the lock, eliminating the TOCTOU race. We translate
-  //      that error into a 'skipped' response so two simultaneous
+  //      this INSERT throw a unique-violation (23505) if another tick
+  //      already holds the lock, eliminating the TOCTOU race. We
+  //      translate that into a 'skipped' response so two simultaneous
   //      cron firings never both proceed to scrape and message.
-  const { data: runRow, error: runErr } = await db
-    .from("cron_runs")
-    .insert({ status: "running" })
-    .select("*")
-    .single();
-  if (runErr || !runRow) {
-    const msg = runErr?.message ?? "could not start run";
-    // Postgres unique-violation = 23505. Supabase surfaces it via the
-    // error code or a message containing "duplicate key". Any of those
-    // means we lost the lock race — that's fine, the other tick is
-    // doing the work.
-    const isDup =
-      runErr?.code === "23505" ||
-      /duplicate key|unique constraint/i.test(msg);
-    if (isDup) {
+  let runRow: CronRunRow;
+  try {
+    const inserted = await sqlOne<CronRunRow>(
+      `INSERT INTO cron_runs (status) VALUES ('running') RETURNING *`,
+    );
+    if (!inserted) {
+      return NextResponse.json(
+        { ok: false, error: "could not start run" },
+        { status: 500 },
+      );
+    }
+    runRow = inserted;
+  } catch (runErr) {
+    if (isUniqueViolation(runErr)) {
       return NextResponse.json({
         ok: true,
         status: "skipped",
@@ -134,7 +131,10 @@ async function run(req: Request) {
       });
     }
     return NextResponse.json(
-      { ok: false, error: msg },
+      {
+        ok: false,
+        error: runErr instanceof Error ? runErr.message : "could not start run",
+      },
       { status: 500 },
     );
   }
@@ -211,16 +211,16 @@ async function run(req: Request) {
         : candidates;
 
     if (fresh.length === 0) {
-      await db
-        .from("cron_runs")
-        .update({
-          status: "success",
-          finished_at: new Date().toISOString(),
-          scraped: 0,
-          errors: 0,
-          notes: `No new articles since ${cutoffUsed} · sitemap-today ${todaysCount} · purged ${purgedArticles}a/${purgedSnapshots}s/${purgedRuns}r`,
-        })
-        .eq("id", runId);
+      await exec(
+        `UPDATE cron_runs
+           SET status = 'success', finished_at = $1, scraped = 0, errors = 0, notes = $2
+         WHERE id = $3`,
+        [
+          new Date().toISOString(),
+          `No new articles since ${cutoffUsed} · sitemap-today ${todaysCount} · purged ${purgedArticles}a/${purgedSnapshots}s/${purgedRuns}r`,
+          runId,
+        ],
+      );
       return NextResponse.json({
         ok: true,
         status: "success",
@@ -567,16 +567,18 @@ async function run(req: Request) {
     }
 
     // ---- Mark success ----
-    await db
-      .from("cron_runs")
-      .update({
-        status: "success",
-        finished_at: new Date().toISOString(),
+    await exec(
+      `UPDATE cron_runs
+         SET status = 'success', finished_at = $1, scraped = $2, errors = $3, notes = $4
+       WHERE id = $5`,
+      [
+        new Date().toISOString(),
         scraped,
         errors,
-        notes: `Cutoff ${cutoffUsed} · ${fresh.length} cand · ${slugsAnalyzed} slugs${geminiError ? ` (gemini-err: ${geminiError.slice(0, 120)})` : ""} · ${usersCreated} authors · ${sectionsCreated} sections · ${nudgesSent}/${nudgesSent + nudgesSkipped} nudges · purged ${purgedArticles}a/${purgedSnapshots}s/${purgedRuns}r`,
-      })
-      .eq("id", runId);
+        `Cutoff ${cutoffUsed} · ${fresh.length} cand · ${slugsAnalyzed} slugs${geminiError ? ` (gemini-err: ${geminiError.slice(0, 120)})` : ""} · ${usersCreated} authors · ${sectionsCreated} sections · ${nudgesSent}/${nudgesSent + nudgesSkipped} nudges · purged ${purgedArticles}a/${purgedSnapshots}s/${purgedRuns}r`,
+        runId,
+      ],
+    );
 
     return NextResponse.json({
       ok: true,
@@ -599,16 +601,12 @@ async function run(req: Request) {
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    await db
-      .from("cron_runs")
-      .update({
-        status: "failed",
-        finished_at: new Date().toISOString(),
-        scraped,
-        errors,
-        notes: msg.slice(0, 500),
-      })
-      .eq("id", runId);
+    await exec(
+      `UPDATE cron_runs
+         SET status = 'failed', finished_at = $1, scraped = $2, errors = $3, notes = $4
+       WHERE id = $5`,
+      [new Date().toISOString(), scraped, errors, msg.slice(0, 500), runId],
+    );
     return NextResponse.json(
       { ok: false, error: msg, scraped, errors },
       { status: 500 },

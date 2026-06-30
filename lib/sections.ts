@@ -1,4 +1,4 @@
-import { getDb } from "./db";
+import { sql, sqlOne, getPool } from "./db";
 import { categoryFromUrl } from "./utils";
 
 /**
@@ -40,13 +40,21 @@ function fromRow(r: Row): Section {
 export async function listSections(opts?: {
   activeOnly?: boolean;
 }): Promise<Section[]> {
-  const db = getDb();
-  if (!db) return [];
-  let q = db.from("sections").select("*").order("id", { ascending: true });
-  if (opts?.activeOnly) q = q.eq("active", true);
-  const { data, error } = await q;
-  if (error || !data) return [];
-  return (data as Row[]).map(fromRow);
+  if (!getPool()) return [];
+  try {
+    const rows = opts?.activeOnly
+      ? await sql<Row>(
+          `SELECT * FROM sections WHERE active = true ORDER BY id ASC`,
+        )
+      : await sql<Row>(`SELECT * FROM sections ORDER BY id ASC`);
+    return rows.map(fromRow);
+  } catch (err) {
+    console.error(
+      "[sections.listSections] select failed:",
+      err instanceof Error ? err.message : String(err),
+    );
+    return [];
+  }
 }
 
 /**
@@ -57,8 +65,7 @@ export async function listSections(opts?: {
 export async function ensureSectionsForUrls(
   urls: string[],
 ): Promise<{ created: number; touched: number }> {
-  const db = getDb();
-  if (!db) return { created: 0, touched: 0 };
+  if (!getPool()) return { created: 0, touched: 0 };
 
   const ids = new Set<string>();
   for (const u of urls) {
@@ -67,37 +74,68 @@ export async function ensureSectionsForUrls(
   }
   if (ids.size === 0) return { created: 0, touched: 0 };
 
+  const idList = [...ids];
+
   // Read what's already there.
-  const { data } = await db.from("sections").select("id").in("id", [...ids]);
-  const known = new Set(((data ?? []) as { id: string }[]).map((r) => r.id));
+  let known = new Set<string>();
+  try {
+    const existing = await sql<{ id: string }>(
+      `SELECT id FROM sections WHERE id = ANY($1::text[])`,
+      [idList],
+    );
+    known = new Set(existing.map((r) => r.id));
+  } catch (err) {
+    console.error(
+      "[sections.ensureSectionsForUrls] select failed:",
+      err instanceof Error ? err.message : String(err),
+    );
+    return { created: 0, touched: 0 };
+  }
 
   const now = new Date().toISOString();
   let created = 0;
   let touched = 0;
 
   // Bulk-insert any new ids in one round-trip.
-  const newRows = [...ids]
-    .filter((id) => !known.has(id))
-    .map((id) => ({
-      id,
-      display_name: titleCase(id),
-      active: true,
-      first_seen_at: now,
-      last_seen_at: now,
-    }));
-  if (newRows.length > 0) {
-    const { error } = await db.from("sections").insert(newRows);
-    if (!error) created = newRows.length;
+  const newIds = idList.filter((id) => !known.has(id));
+  if (newIds.length > 0) {
+    const cols: string[] = [];
+    const params: unknown[] = [];
+    let p = 1;
+    for (const id of newIds) {
+      cols.push(`($${p++},$${p++},$${p++},$${p++},$${p++})`);
+      params.push(id, titleCase(id), true, now, now);
+    }
+    try {
+      await sql(
+        `INSERT INTO sections (id, display_name, active, first_seen_at, last_seen_at)
+         VALUES ${cols.join(",")}`,
+        params,
+      );
+      created = newIds.length;
+    } catch (err) {
+      console.error(
+        "[sections.ensureSectionsForUrls] insert failed:",
+        err instanceof Error ? err.message : String(err),
+      );
+    }
   }
 
   // Bump last_seen_at for the rest.
-  const seenIds = [...ids].filter((id) => known.has(id));
+  const seenIds = idList.filter((id) => known.has(id));
   if (seenIds.length > 0) {
-    const { error } = await db
-      .from("sections")
-      .update({ last_seen_at: now })
-      .in("id", seenIds);
-    if (!error) touched = seenIds.length;
+    try {
+      await sql(
+        `UPDATE sections SET last_seen_at = $1 WHERE id = ANY($2::text[])`,
+        [now, seenIds],
+      );
+      touched = seenIds.length;
+    } catch (err) {
+      console.error(
+        "[sections.ensureSectionsForUrls] update failed:",
+        err instanceof Error ? err.message : String(err),
+      );
+    }
   }
 
   return { created, touched };
@@ -107,27 +145,36 @@ export async function updateSection(
   id: string,
   patch: { displayName?: string; active?: boolean },
 ): Promise<Section | null> {
-  const db = getDb();
-  if (!db) return null;
-  const update: Record<string, unknown> = {};
+  if (!getPool()) return null;
+  const sets: string[] = [];
+  const params: unknown[] = [];
+  let p = 1;
   if (
     typeof patch.displayName === "string" &&
     patch.displayName.trim().length > 0
   ) {
-    update.display_name = patch.displayName.trim();
+    sets.push(`display_name = $${p++}`);
+    params.push(patch.displayName.trim());
   }
   if (typeof patch.active === "boolean") {
-    update.active = patch.active;
+    sets.push(`active = $${p++}`);
+    params.push(patch.active);
   }
-  if (Object.keys(update).length === 0) return null;
-  const { data, error } = await db
-    .from("sections")
-    .update(update)
-    .eq("id", id)
-    .select("*")
-    .single();
-  if (error || !data) return null;
-  return fromRow(data as Row);
+  if (sets.length === 0) return null;
+  params.push(id);
+  try {
+    const row = await sqlOne<Row>(
+      `UPDATE sections SET ${sets.join(", ")} WHERE id = $${p} RETURNING *`,
+      params,
+    );
+    return row ? fromRow(row) : null;
+  } catch (err) {
+    console.error(
+      "[sections.updateSection] update failed:",
+      err instanceof Error ? err.message : String(err),
+    );
+    return null;
+  }
 }
 
 function titleCase(id: string): string {

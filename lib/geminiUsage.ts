@@ -1,4 +1,4 @@
-import { getDb } from "./db";
+import { sql, sqlOne, exec, getPool } from "./db";
 import { todayInIST } from "./dates";
 
 /**
@@ -64,40 +64,28 @@ export async function recordGeminiUsage(
   outputTokens: number,
   requestCount: number = 1,
 ): Promise<void> {
-  const db = getDb();
-  if (!db) return;
+  if (!getPool()) return;
   if (promptTokens <= 0 && outputTokens <= 0) return;
 
   const date = todayInIST();
-  // Read current totals (if any), then upsert with the new sums.
-  // Supabase doesn't expose atomic INCREMENT via the REST client, so we
-  // read-modify-write. Cron is single-flight per tick, so the race is
-  // theoretical; if it ever matters we move this to an RPC.
-  const { data } = await db
-    .from("gemini_usage")
-    .select("prompt_tokens,output_tokens,request_count")
-    .eq("date", date)
-    .maybeSingle();
-  const cur = (data ?? {
-    prompt_tokens: 0,
-    output_tokens: 0,
-    request_count: 0,
-  }) as { prompt_tokens: number; output_tokens: number; request_count: number };
-
-  const { error } = await db.from("gemini_usage").upsert(
-    {
-      date,
-      prompt_tokens: Number(cur.prompt_tokens) + promptTokens,
-      output_tokens: Number(cur.output_tokens) + outputTokens,
-      request_count: (cur.request_count ?? 0) + requestCount,
-      updated_at: new Date().toISOString(),
-    },
-    { onConflict: "date" },
-  );
-  if (error) {
+  // Atomic accumulate: upsert that ADDS the new tokens to whatever is
+  // already stored for this IST date. Postgres does the read-modify-write
+  // in a single statement, so concurrent ticks can't clobber each other.
+  try {
+    await exec(
+      `INSERT INTO gemini_usage (date, prompt_tokens, output_tokens, request_count)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (date) DO UPDATE SET
+         prompt_tokens = gemini_usage.prompt_tokens + EXCLUDED.prompt_tokens,
+         output_tokens = gemini_usage.output_tokens + EXCLUDED.output_tokens,
+         request_count = gemini_usage.request_count + EXCLUDED.request_count,
+         updated_at = NOW()`,
+      [date, promptTokens, outputTokens, requestCount],
+    );
+  } catch (err) {
     console.error(
       "[geminiUsage.recordGeminiUsage] upsert failed:",
-      error.message,
+      err instanceof Error ? err.message : String(err),
     );
   }
 }
@@ -109,15 +97,20 @@ export async function recordGeminiUsage(
 export async function listGeminiUsage(
   days: number = 7,
 ): Promise<GeminiUsageRow[]> {
-  const db = getDb();
-  if (!db) return [];
-  const { data, error } = await db
-    .from("gemini_usage")
-    .select("*")
-    .order("date", { ascending: false })
-    .limit(days);
-  if (error || !data) return [];
-  return (data as Row[]).map(fromRow);
+  if (!getPool()) return [];
+  try {
+    const rows = await sql<Row>(
+      `SELECT * FROM gemini_usage ORDER BY date DESC LIMIT $1`,
+      [days],
+    );
+    return rows.map(fromRow);
+  } catch (err) {
+    console.error(
+      "[geminiUsage.listGeminiUsage] select failed:",
+      err instanceof Error ? err.message : String(err),
+    );
+    return [];
+  }
 }
 
 /**
@@ -128,21 +121,29 @@ export async function getLifetimeGeminiUsage(): Promise<{
   outputTokens: number;
   requestCount: number;
 }> {
-  const db = getDb();
-  if (!db) return { promptTokens: 0, outputTokens: 0, requestCount: 0 };
-  const { data, error } = await db
-    .from("gemini_usage")
-    .select("prompt_tokens,output_tokens,request_count");
-  if (error || !data) {
+  if (!getPool()) return { promptTokens: 0, outputTokens: 0, requestCount: 0 };
+  try {
+    const row = await sqlOne<{
+      prompt_tokens: number;
+      output_tokens: number;
+      request_count: number;
+    }>(
+      `SELECT
+         COALESCE(SUM(prompt_tokens), 0)::bigint AS prompt_tokens,
+         COALESCE(SUM(output_tokens), 0)::bigint AS output_tokens,
+         COALESCE(SUM(request_count), 0)::int    AS request_count
+       FROM gemini_usage`,
+    );
+    return {
+      promptTokens: Number(row?.prompt_tokens) || 0,
+      outputTokens: Number(row?.output_tokens) || 0,
+      requestCount: Number(row?.request_count) || 0,
+    };
+  } catch (err) {
+    console.error(
+      "[geminiUsage.getLifetimeGeminiUsage] select failed:",
+      err instanceof Error ? err.message : String(err),
+    );
     return { promptTokens: 0, outputTokens: 0, requestCount: 0 };
   }
-  let p = 0;
-  let o = 0;
-  let r = 0;
-  for (const row of data as Row[]) {
-    p += Number(row.prompt_tokens) || 0;
-    o += Number(row.output_tokens) || 0;
-    r += row.request_count ?? 0;
-  }
-  return { promptTokens: p, outputTokens: o, requestCount: r };
 }

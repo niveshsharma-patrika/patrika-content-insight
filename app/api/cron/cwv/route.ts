@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getDb } from "@/lib/db";
+import { isDbConfigured, sqlOne } from "@/lib/db";
 import { istDateMinusDays, todayInIST } from "@/lib/dates";
 import {
   fetchPsi,
@@ -56,25 +56,20 @@ async function run(req: Request) {
     return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
   }
 
-  const db = getDb();
-  if (!db) {
+  if (!isDbConfigured()) {
     return NextResponse.json({ ok: false, error: "DB not configured" }, { status: 500 });
   }
 
   const istDate = todayInIST();
 
   // ---- Pick the latest published article URL (ok scrapes only). ----
-  let articleUrl: string | null = null;
-  {
-    const { data } = await db
-      .from("articles")
-      .select("url")
-      .eq("ok", true)
-      .order("published_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    articleUrl = (data as { url?: string } | null)?.url ?? null;
-  }
+  const latest = await sqlOne<{ url: string }>(
+    `SELECT url FROM articles
+     WHERE ok = true
+     ORDER BY published_at DESC NULLS LAST
+     LIMIT 1`,
+  );
+  const articleUrl: string | null = latest?.url ?? null;
 
   // ---- Build the work list: homepage always; article when we have one. ----
   const targets: Array<{ pageType: CwvPageType; url: string }> = [

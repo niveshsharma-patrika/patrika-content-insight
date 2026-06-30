@@ -1,4 +1,4 @@
-import { getDb } from "./db";
+import { sql, exec, getPool } from "./db";
 
 /**
  * Editor-controlled on/off switches for rules in the catalog.
@@ -38,36 +38,29 @@ export async function getDisabledRuleIds(opts?: {
     return cache.ids;
   }
 
-  const db = getDb();
-  if (!db) {
+  if (!getPool()) {
     cache = { ids: new Set(), fetchedAt: now };
     return cache.ids;
   }
 
-  const { data, error } = await db
-    .from("rule_overrides")
-    .select("rule_id,enabled")
-    .eq("enabled", false);
-
-  if (error) {
+  try {
+    const rows = await sql<{ rule_id: string; enabled: boolean }>(
+      `SELECT rule_id, enabled FROM rule_overrides WHERE enabled = false`,
+    );
+    const ids = new Set<string>(rows.map((r) => r.rule_id));
+    cache = { ids, fetchedAt: now };
+    return ids;
+  } catch (err) {
     // Most likely "table not found" before the migration is applied.
     // Warn once-ish (TTL still applies so this won't spam) and treat
     // as no overrides — every rule remains enabled.
     console.warn(
       "[ruleSettings.getDisabledRuleIds] read failed, defaulting to all-enabled:",
-      error.message,
+      err instanceof Error ? err.message : String(err),
     );
     cache = { ids: new Set(), fetchedAt: now };
     return cache.ids;
   }
-
-  const ids = new Set<string>(
-    (data as Array<{ rule_id: string; enabled: boolean }> | null)?.map(
-      (r) => r.rule_id,
-    ) ?? [],
-  );
-  cache = { ids, fetchedAt: now };
-  return ids;
 }
 
 /**
@@ -79,17 +72,15 @@ export async function setRuleEnabled(
   ruleId: string,
   enabled: boolean,
 ): Promise<void> {
-  const db = getDb();
-  if (!db) throw new Error("Database not configured");
-  const { error } = await db.from("rule_overrides").upsert(
-    {
-      rule_id: ruleId,
-      enabled,
-      updated_at: new Date().toISOString(),
-    },
-    { onConflict: "rule_id" },
+  if (!getPool()) throw new Error("Database not configured");
+  await exec(
+    `INSERT INTO rule_overrides (rule_id, enabled, updated_at)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (rule_id) DO UPDATE SET
+       enabled = EXCLUDED.enabled,
+       updated_at = EXCLUDED.updated_at`,
+    [ruleId, enabled, new Date().toISOString()],
   );
-  if (error) throw new Error(error.message);
   // Force next read to re-fetch — cheaper than mutating the cached set
   // and getting the cross-process picture wrong.
   cache = null;
@@ -103,21 +94,19 @@ export async function setRuleEnabled(
 export async function readAllOverrides(): Promise<
   Array<{ ruleId: string; enabled: boolean; updatedAt: string | null }>
 > {
-  const db = getDb();
-  if (!db) return [];
-  const { data, error } = await db
-    .from("rule_overrides")
-    .select("rule_id,enabled,updated_at");
-  if (error || !data) return [];
-  return (
-    data as Array<{
+  if (!getPool()) return [];
+  try {
+    const rows = await sql<{
       rule_id: string;
       enabled: boolean;
       updated_at: string | null;
-    }>
-  ).map((r) => ({
-    ruleId: r.rule_id,
-    enabled: r.enabled,
-    updatedAt: r.updated_at,
-  }));
+    }>(`SELECT rule_id, enabled, updated_at FROM rule_overrides`);
+    return rows.map((r) => ({
+      ruleId: r.rule_id,
+      enabled: r.enabled,
+      updatedAt: r.updated_at,
+    }));
+  } catch {
+    return [];
+  }
 }

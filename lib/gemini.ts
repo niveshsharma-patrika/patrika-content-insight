@@ -1,6 +1,6 @@
 import { GoogleGenAI } from "@google/genai";
 import { getConfig } from "./config";
-import { getDb } from "./db";
+import { sql, exec, getPool } from "./db";
 import { recordGeminiUsage } from "./geminiUsage";
 import type { SlugVerdict } from "./types";
 
@@ -39,18 +39,21 @@ async function readSlugCacheBatch(
 ): Promise<Map<string, SlugVerdict>> {
   const out = new Map<string, SlugVerdict>();
   if (slugs.length === 0) return out;
-  const db = getDb();
-  if (!db) return out;
+  if (!getPool()) return out;
   const CHUNK = 200;
   for (let i = 0; i < slugs.length; i += CHUNK) {
     const slice = slugs.slice(i, i + CHUNK);
-    const { data, error } = await db
-      .from("slug_verdicts")
-      .select("*")
-      .in("slug", slice);
-    if (error) continue;
-    for (const r of (data ?? []) as SlugRow[]) {
-      out.set(r.slug, rowToVerdict(r));
+    try {
+      const rows = await sql<SlugRow>(
+        `SELECT slug, verdict, score, language, notes
+         FROM slug_verdicts WHERE slug = ANY($1::text[])`,
+        [slice],
+      );
+      for (const r of rows) {
+        out.set(r.slug, rowToVerdict(r));
+      }
+    } catch {
+      continue;
     }
   }
   return out;
@@ -58,21 +61,34 @@ async function readSlugCacheBatch(
 
 async function writeSlugVerdicts(verdicts: SlugVerdict[]): Promise<void> {
   if (verdicts.length === 0) return;
-  const db = getDb();
-  if (!db) return;
-  const rows = verdicts.map((v) => ({
-    slug: v.slug,
-    verdict: v.verdict,
-    score: v.score,
-    language: v.language,
-    notes: v.notes,
-    cached_at: new Date().toISOString(),
-  }));
-  const { error } = await db
-    .from("slug_verdicts")
-    .upsert(rows, { onConflict: "slug" });
-  if (error) {
-    console.error("[gemini.writeSlugVerdicts] upsert failed:", error.message);
+  if (!getPool()) return;
+  const cachedAt = new Date().toISOString();
+  const params: unknown[] = [];
+  const valueRows: string[] = [];
+  for (const v of verdicts) {
+    const base = params.length;
+    valueRows.push(
+      `($${base + 1},$${base + 2},$${base + 3},$${base + 4},$${base + 5},$${base + 6})`,
+    );
+    params.push(v.slug, v.verdict, v.score, v.language, v.notes, cachedAt);
+  }
+  try {
+    await exec(
+      `INSERT INTO slug_verdicts (slug, verdict, score, language, notes, cached_at)
+       VALUES ${valueRows.join(",")}
+       ON CONFLICT (slug) DO UPDATE SET
+         verdict = EXCLUDED.verdict,
+         score = EXCLUDED.score,
+         language = EXCLUDED.language,
+         notes = EXCLUDED.notes,
+         cached_at = EXCLUDED.cached_at`,
+      params,
+    );
+  } catch (err) {
+    console.error(
+      "[gemini.writeSlugVerdicts] upsert failed:",
+      err instanceof Error ? err.message : String(err),
+    );
   }
 }
 

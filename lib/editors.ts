@@ -1,4 +1,4 @@
-import { getDb } from "./db";
+import { sql, sqlOne, exec, getPool } from "./db";
 
 /**
  * Editors are review-queue subscribers — they receive a Telegram nudge
@@ -84,16 +84,21 @@ function genId(): string {
 export async function listEditors(opts?: {
   activeOnly?: boolean;
 }): Promise<Editor[]> {
-  const db = getDb();
-  if (!db) return [];
-  let q = db
-    .from("editors")
-    .select("*")
-    .order("created_at", { ascending: true });
-  if (opts?.activeOnly) q = q.eq("active", true);
-  const { data, error } = await q;
-  if (error || !data) return [];
-  return (data as Row[]).map(fromRow);
+  if (!getPool()) return [];
+  try {
+    const rows = opts?.activeOnly
+      ? await sql<Row>(
+          `SELECT * FROM editors WHERE active = true ORDER BY created_at ASC`,
+        )
+      : await sql<Row>(`SELECT * FROM editors ORDER BY created_at ASC`);
+    return rows.map(fromRow);
+  } catch (err) {
+    console.error(
+      "[editors.listEditors] select failed:",
+      err instanceof Error ? err.message : String(err),
+    );
+    return [];
+  }
 }
 
 export type UpsertEditorInput = {
@@ -115,8 +120,7 @@ function sanitizeRoles(
 }
 
 export async function upsertEditor(input: UpsertEditorInput): Promise<Editor> {
-  const db = getDb();
-  if (!db) throw new Error("Database not configured");
+  if (!getPool()) throw new Error("Database not configured");
   const name = input.name.trim();
   const chatId = input.telegramChatId.trim();
   if (!name) throw new Error("Name is required");
@@ -135,13 +139,12 @@ export async function upsertEditor(input: UpsertEditorInput): Promise<Editor> {
   const now = new Date().toISOString();
 
   if (input.id) {
-    const { data: existing, error: selErr } = await db
-      .from("editors")
-      .select("*")
-      .eq("id", input.id)
-      .maybeSingle();
-    if (selErr || !existing) throw new Error("Editor not found");
-    const prev = existing as Row;
+    const existing = await sqlOne<Row>(
+      `SELECT * FROM editors WHERE id = $1`,
+      [input.id],
+    );
+    if (!existing) throw new Error("Editor not found");
+    const prev = existing;
     const cleanRoles = sanitizeRoles(input.roles);
     const update = {
       name: name || prev.name,
@@ -152,14 +155,34 @@ export async function upsertEditor(input: UpsertEditorInput): Promise<Editor> {
         input.notes === undefined ? prev.notes : input.notes.trim() || null,
       updated_at: now,
     };
-    const { data, error } = await db
-      .from("editors")
-      .update(update)
-      .eq("id", input.id)
-      .select("*")
-      .single();
-    if (error || !data) throw new Error(error?.message ?? "Update failed");
-    return fromRow(data as Row);
+    try {
+      const row = await sqlOne<Row>(
+        `UPDATE editors SET
+           name = $2,
+           telegram_chat_id = $3,
+           active = $4,
+           roles = $5::text[],
+           notes = $6,
+           updated_at = $7
+         WHERE id = $1
+         RETURNING *`,
+        [
+          input.id,
+          update.name,
+          update.telegram_chat_id,
+          update.active,
+          update.roles,
+          update.notes,
+          update.updated_at,
+        ],
+      );
+      if (!row) throw new Error("Update failed");
+      return fromRow(row);
+    } catch (err) {
+      throw new Error(
+        err instanceof Error ? err.message : "Update failed",
+      );
+    }
   }
 
   const insert = {
@@ -172,17 +195,31 @@ export async function upsertEditor(input: UpsertEditorInput): Promise<Editor> {
     created_at: now,
     updated_at: now,
   };
-  const { data, error } = await db
-    .from("editors")
-    .insert(insert)
-    .select("*")
-    .single();
-  if (error || !data) throw new Error(error?.message ?? "Insert failed");
-  return fromRow(data as Row);
+  try {
+    const row = await sqlOne<Row>(
+      `INSERT INTO editors (
+         id, name, telegram_chat_id, active, roles, notes, created_at, updated_at
+       ) VALUES ($1,$2,$3,$4,$5::text[],$6,$7,$8)
+       RETURNING *`,
+      [
+        insert.id,
+        insert.name,
+        insert.telegram_chat_id,
+        insert.active,
+        insert.roles,
+        insert.notes,
+        insert.created_at,
+        insert.updated_at,
+      ],
+    );
+    if (!row) throw new Error("Insert failed");
+    return fromRow(row);
+  } catch (err) {
+    throw new Error(err instanceof Error ? err.message : "Insert failed");
+  }
 }
 
 export async function deleteEditor(id: string): Promise<void> {
-  const db = getDb();
-  if (!db) return;
-  await db.from("editors").delete().eq("id", id);
+  if (!getPool()) return;
+  await exec(`DELETE FROM editors WHERE id = $1`, [id]);
 }
