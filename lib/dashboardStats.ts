@@ -13,7 +13,37 @@ import { getDb } from "./db";
 export type DailySnapshot = {
   date: string; // YYYY-MM-DD
   totalArticles: number | null;
+  analyzed: number | null;
+  totalErrors: number | null;
+  totalWarnings: number | null;
+  avgEditorialScore: number | null;
+  avgSeoScore: number | null;
 };
+
+type SnapshotRow = {
+  date: string;
+  total_articles: number | null;
+  analyzed?: number | null;
+  total_errors: number | null;
+  total_warnings: number | null;
+  avg_editorial_score: number | null;
+  avg_seo_score: number | null;
+};
+
+function rowToSnapshot(row: SnapshotRow): DailySnapshot {
+  return {
+    date: row.date,
+    totalArticles: row.total_articles,
+    analyzed: row.analyzed ?? null,
+    totalErrors: row.total_errors,
+    totalWarnings: row.total_warnings,
+    avgEditorialScore: row.avg_editorial_score,
+    avgSeoScore: row.avg_seo_score,
+  };
+}
+
+const SNAPSHOT_COLS =
+  "date,total_articles,total_errors,total_warnings,avg_editorial_score,avg_seo_score";
 
 export async function readDailySnapshot(
   istDate: string,
@@ -22,12 +52,64 @@ export async function readDailySnapshot(
   if (!db) return null;
   const { data, error } = await db
     .from("daily_snapshots")
-    .select("date,total_articles")
+    .select(SNAPSHOT_COLS)
     .eq("date", istDate)
     .maybeSingle();
   if (error || !data) return null;
-  const row = data as { date: string; total_articles: number | null };
-  return { date: row.date, totalArticles: row.total_articles };
+  return rowToSnapshot(data as SnapshotRow);
+}
+
+/**
+ * The most recent `limit` daily snapshots, OLDEST-first (chart-ready).
+ * Powers the home-page daily-issues trend graph.
+ */
+export async function readRecentSnapshots(
+  limit: number = 7,
+): Promise<DailySnapshot[]> {
+  const db = getDb();
+  if (!db) return [];
+  const { data, error } = await db
+    .from("daily_snapshots")
+    .select(SNAPSHOT_COLS)
+    .order("date", { ascending: false })
+    .limit(limit);
+  if (error || !data) return [];
+  return (data as SnapshotRow[]).map(rowToSnapshot).reverse();
+}
+
+/**
+ * Fill in the per-day issue aggregates computed from the day's stored
+ * articles. Called at the end of each scrape-cron tick. Uses .update()
+ * (not upsert) so it never clobbers the total_articles written earlier
+ * in the same tick — the row is guaranteed to exist by then.
+ */
+export async function updateDailySnapshotAggregates(
+  istDate: string,
+  agg: {
+    analyzed: number;
+    errors: number;
+    warnings: number;
+    avgEditorialScore: number;
+    avgSeoScore: number;
+  },
+): Promise<void> {
+  const db = getDb();
+  if (!db) return;
+  const { error } = await db
+    .from("daily_snapshots")
+    .update({
+      total_errors: agg.errors,
+      total_warnings: agg.warnings,
+      avg_editorial_score: agg.avgEditorialScore,
+      avg_seo_score: agg.avgSeoScore,
+    })
+    .eq("date", istDate);
+  if (error) {
+    console.error(
+      "[dashboardStats.updateDailySnapshotAggregates] failed:",
+      error.message,
+    );
+  }
 }
 
 /**

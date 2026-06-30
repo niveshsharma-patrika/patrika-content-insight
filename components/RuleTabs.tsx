@@ -18,6 +18,7 @@ const CATEGORY_ORDER = [
   "schema",
   "eeat",
   "discover",
+  "amp",
 ];
 
 function groupByCategory(list: RuleResultRow[]): Record<string, RuleResultRow[]> {

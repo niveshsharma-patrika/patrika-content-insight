@@ -1,8 +1,11 @@
 import { NextResponse } from "next/server";
 import { fetchSitemap } from "@/lib/sitemap";
 import { checkSlugsWithGemini, readCachedSlugVerdicts } from "@/lib/gemini";
+import { requireRole } from "@/lib/session";
 
 export async function POST(req: Request) {
+  const gate = await requireRole("editor");
+  if (!gate.ok) return gate.response;
   const body = await req.json().catch(() => ({}) as Record<string, unknown>);
   const force = !!body.force;
   // How many of the latest sitemap entries to evaluate. Default 200.

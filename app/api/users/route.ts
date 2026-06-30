@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { listUsers, upsertUser } from "@/lib/users";
+import { requireRole } from "@/lib/session";
 
 export async function GET() {
   const users = await listUsers();
@@ -7,6 +8,8 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
+  const gate = await requireRole("editor");
+  if (!gate.ok) return gate.response;
   const body = (await req.json().catch(() => null)) as Record<
     string,
     unknown

@@ -25,11 +25,29 @@
 
 const COOKIE_NAME = "pci_session";
 const COOKIE_MAX_AGE_SECONDS = 30 * 24 * 60 * 60; // 30 days
-const PAYLOAD_VERSION = 1;
+// Bumped 1→2 when per-user roles were added to the payload. Old v1
+// cookies (no role) are rejected, forcing a one-time re-login.
+const PAYLOAD_VERSION = 2;
+
+/** Permission tier. Higher rank = more access. */
+export type Role = "admin" | "editor" | "viewer";
+
+const ROLE_RANK: Record<Role, number> = { viewer: 0, editor: 1, admin: 2 };
+
+export function isRole(v: unknown): v is Role {
+  return v === "admin" || v === "editor" || v === "viewer";
+}
+
+/** True when `role` is at least as privileged as `min`. */
+export function roleAtLeast(role: Role, min: Role): boolean {
+  return ROLE_RANK[role] >= ROLE_RANK[min];
+}
 
 export type SessionPayload = {
   /** Username at time of login. Kept for /api/auth/whoami / logging. */
   user: string;
+  /** Permission tier baked into the signed cookie (tamper-proof). */
+  role: Role;
   /** Expiry as ms since epoch. Validated alongside cookie Max-Age. */
   exp: number;
   /** Payload schema version — so future changes can invalidate old cookies. */
@@ -93,9 +111,13 @@ async function getSigningKey(): Promise<CryptoKey> {
  * Build a signed session cookie value for the given username.
  * Cookie is valid for COOKIE_MAX_AGE_SECONDS from now.
  */
-export async function createSessionCookieValue(user: string): Promise<string> {
+export async function createSessionCookieValue(
+  user: string,
+  role: Role,
+): Promise<string> {
   const payload: SessionPayload = {
     user,
+    role,
     exp: Date.now() + COOKIE_MAX_AGE_SECONDS * 1000,
     v: PAYLOAD_VERSION,
   };
@@ -160,11 +182,16 @@ export async function verifySessionCookieValue(
   }
   if (!json || typeof json !== "object") return null;
   const p = json as Record<string, unknown>;
-  if (typeof p.user !== "string" || typeof p.exp !== "number" || p.v !== PAYLOAD_VERSION) {
+  if (
+    typeof p.user !== "string" ||
+    typeof p.exp !== "number" ||
+    !isRole(p.role) ||
+    p.v !== PAYLOAD_VERSION
+  ) {
     return null;
   }
   if (p.exp <= Date.now()) return null;
-  return { user: p.user, exp: p.exp, v: p.v };
+  return { user: p.user, role: p.role, exp: p.exp, v: p.v };
 }
 
 /**

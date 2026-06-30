@@ -167,12 +167,146 @@ export async function scrapeArticle(url: string): Promise<ScrapedArticle> {
     };
     const html = await res.text();
     const htmlBytes = Buffer.byteLength(html, "utf8");
-    return parseArticleHtml(url, fetchedAt, html, { ...httpMeta, htmlBytes });
+    const base = parseArticleHtml(url, fetchedAt, html, { ...httpMeta, htmlBytes });
+    // If the article advertises an AMP version, fetch + analyze it too so
+    // the `amp` category rules (validation, content/schema parity, embeds)
+    // have data. Fail-soft: any AMP error never sinks the canonical scrape.
+    if (base.ok && base.ampUrl) {
+      base.amp = await fetchAndAnalyzeAmp(base.ampUrl);
+    }
+    return base;
   } catch (err) {
     return makeError(url, fetchedAt, (err as Error).message);
   } finally {
     clearTimeout(timeout);
   }
+}
+
+const AMP_FETCH_TIMEOUT_MS = 15000;
+const AMP_EMBED_SELECTOR =
+  "amp-youtube, amp-twitter, amp-facebook, amp-instagram, amp-iframe, amp-video, amp-brightcove, amp-tiktok, amp-vimeo, amp-dailymotion";
+
+/**
+ * Fetch an article's AMP page and analyze it. Returns an AmpReport in
+ * all cases — `fetched:false` (+ error) when the page can't be retrieved
+ * so the rules can distinguish "no AMP data" from "AMP is broken".
+ */
+async function fetchAndAnalyzeAmp(ampUrl: string): Promise<import("./types").AmpReport> {
+  const base: import("./types").AmpReport = {
+    url: ampUrl,
+    fetched: false,
+    valid: false,
+    criticalErrors: [],
+    wordCount: 0,
+    hasNewsArticle: false,
+    embedCount: 0,
+  };
+  // Same allowlist discipline as the canonical fetch.
+  try {
+    const u = new URL(ampUrl);
+    if (u.protocol !== "https:" || !u.hostname.endsWith("patrika.com")) {
+      return { ...base, error: "AMP host not allowed" };
+    }
+  } catch {
+    return { ...base, error: "Malformed AMP URL" };
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), AMP_FETCH_TIMEOUT_MS);
+  try {
+    const res = await fetch(ampUrl, {
+      signal: controller.signal,
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 PatrikaContentInsight/1.0",
+        Accept: "text/html,application/xhtml+xml",
+      },
+      cache: "no-store",
+    });
+    if (!res.ok) return { ...base, error: `HTTP ${res.status}` };
+    const html = await res.text();
+    return analyzeAmp(ampUrl, html);
+  } catch (err) {
+    return { ...base, error: (err as Error).message };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/** Structural ("no critical errors") AMP analysis. Heuristic, not the
+ *  official amphtml validator — catches the breakages that actually
+ *  invalidate a page (missing runtime/boilerplate, raw <img>/<script>,
+ *  no canonical) without shipping the 1.5 MB validator into the cron. */
+function analyzeAmp(ampUrl: string, html: string): import("./types").AmpReport {
+  const $ = cheerio.load(html);
+  const critical: string[] = [];
+
+  const htmlAttribs =
+    ($("html").get(0) as { attribs?: Record<string, string> } | undefined)
+      ?.attribs ?? {};
+  const isAmpDoc =
+    "⚡" in htmlAttribs || "amp" in htmlAttribs || /<html[^>]*(\s⚡|\samp)(\s|>|=)/i.test(html);
+  if (!isAmpDoc) critical.push("<html> missing the amp (⚡) attribute");
+
+  if (!/cdn\.ampproject\.org\/v0\.js/i.test(html))
+    critical.push("AMP runtime (v0.js) not loaded");
+  // Patrika serves *transformed* (SSR) AMP, where the `amp-boilerplate`
+  // style is legitimately replaced by an `amp-runtime` style. Accept
+  // either — requiring only amp-boilerplate would false-flag valid
+  // transformed pages.
+  if (!/amp-boilerplate/i.test(html) && !/<style[^>]*\bamp-runtime\b/i.test(html))
+    critical.push("AMP boilerplate / runtime style missing");
+  if ($("link[rel='canonical']").attr("href")?.trim() === undefined)
+    critical.push("no <link rel=canonical>");
+  if (!$("meta[charset]").attr("charset") && !/charset/i.test(html.slice(0, 2000)))
+    critical.push("no charset declaration");
+  if (!$("meta[name='viewport']").attr("content"))
+    critical.push("no viewport meta");
+
+  // Disallowed raw <img> — AMP requires <amp-img>. Transformed/SSR AMP,
+  // though, renders a raw <img> *inside* every <amp-img> as the server-
+  // side placeholder, which is valid. So only flag when the page uses
+  // raw <img> with NO <amp-img> at all (i.e. genuinely un-AMP'd images).
+  const ampImgCount = $("amp-img").length;
+  const withoutNoscript = html.replace(/<noscript[\s\S]*?<\/noscript>/gi, "");
+  if (ampImgCount === 0 && /<img[\s>]/i.test(withoutNoscript))
+    critical.push("raw <img> tags (AMP requires <amp-img>)");
+
+  // Disallowed author JavaScript: an EXTERNAL <script src> whose host
+  // isn't cdn.ampproject.org. (Inline scripts are intentionally not
+  // flagged — transformed AMP carries allowed inline scripts like
+  // amp-onerror, and flagging them heuristically risks false positives.)
+  let badScripts = 0;
+  $("script[src]").each((_, el) => {
+    const src = $(el).attr("src") ?? "";
+    if (src && !/cdn\.ampproject\.org/i.test(src)) badScripts += 1;
+  });
+  if (badScripts > 0)
+    critical.push(`${badScripts} external non-AMP <script> tag${badScripts === 1 ? "" : "s"}`);
+
+  const structured = extractStructuredData($);
+  let wordCount = 0;
+  if (structured.articleBody) {
+    wordCount = structured.articleBody.replace(/\s+/g, " ").trim().split(" ").filter(Boolean).length;
+  } else {
+    const bodyText = $("body").clone().find("script,style,noscript").remove().end().text();
+    wordCount = bodyText.replace(/\s+/g, " ").trim().split(" ").filter(Boolean).length;
+  }
+
+  const embedCount = $(AMP_EMBED_SELECTOR).length;
+
+  return {
+    url: ampUrl,
+    fetched: true,
+    valid: critical.length === 0,
+    criticalErrors: critical,
+    wordCount,
+    hasNewsArticle: structured.hasArticle,
+    schemaType: structured.schemaType,
+    schemaHeadline: structured.headline,
+    schemaDatePublished: structured.datePublished,
+    embedCount,
+  };
 }
 
 function emptyStructured(): StructuredData {

@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server";
 import { getBotInfo, isTelegramConfigured, sendTelegramMessage } from "@/lib/telegram";
+import { requireRole } from "@/lib/session";
 
 export async function GET() {
+  const gate = await requireRole("editor");
+  if (!gate.ok) return gate.response;
   if (!(await isTelegramConfigured())) {
     return NextResponse.json(
       { ok: false, error: "Telegram bot token not configured" },
@@ -20,6 +23,8 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
+  const gate = await requireRole("editor");
+  if (!gate.ok) return gate.response;
   const body = (await req.json().catch(() => null)) as Record<
     string,
     unknown

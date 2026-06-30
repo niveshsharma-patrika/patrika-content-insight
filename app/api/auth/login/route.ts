@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
 import {
   buildSetCookieHeader,
-  constantTimeEq,
   createSessionCookieValue,
   isAuthConfigured,
 } from "@/lib/auth";
+import { authenticateUser } from "@/lib/dashboardUsers";
 
 /**
  * POST /api/auth/login
@@ -41,30 +41,28 @@ export async function POST(req: Request) {
 
   if (!isAuthConfigured()) {
     // No credentials configured — same behavior as the proxy: pass.
-    // We still set a session cookie so the redirect doesn't loop.
+    // We still set a session cookie so the redirect doesn't loop. Dev
+    // sessions are admins so the whole app is exercisable locally.
     const cookieValue = await createSessionCookieValue(
       submittedUser || "anonymous",
+      "admin",
     );
-    const res = NextResponse.json({ ok: true, user: submittedUser });
+    const res = NextResponse.json({ ok: true, user: submittedUser, role: "admin" });
     res.headers.set("set-cookie", buildSetCookieHeader(cookieValue));
     return res;
   }
 
-  const expectedUser = process.env.DASHBOARD_USERNAME!.trim();
-  const expectedPass = process.env.DASHBOARD_PASSWORD!;
-
-  if (
-    !constantTimeEq(submittedUser, expectedUser) ||
-    !constantTimeEq(submittedPass, expectedPass)
-  ) {
+  // Check DB users first, then fall back to the env break-glass admin.
+  const identity = await authenticateUser(submittedUser, submittedPass);
+  if (!identity) {
     return NextResponse.json(
       { ok: false, error: "Incorrect username or password." },
       { status: 401 },
     );
   }
 
-  const cookieValue = await createSessionCookieValue(expectedUser);
-  const res = NextResponse.json({ ok: true, user: expectedUser });
+  const cookieValue = await createSessionCookieValue(identity.user, identity.role);
+  const res = NextResponse.json({ ok: true, user: identity.user, role: identity.role });
   res.headers.set("set-cookie", buildSetCookieHeader(cookieValue));
   return res;
 }

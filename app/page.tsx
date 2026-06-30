@@ -1,12 +1,12 @@
-import {
-  getCachedDashboardStats,
-  getHourDashboard,
-} from "@/lib/analyze";
+import { getDayDashboard } from "@/lib/analyze";
 import { ComplianceSection } from "@/components/ComplianceSection";
+import { CoreWebVitals } from "@/components/CoreWebVitals";
+import { DailyIssuesChart } from "@/components/DailyIssuesChart";
 import { DatePicker } from "@/components/DatePicker";
+import { readLatestCwvReports } from "@/lib/cwv";
+import { readRecentSnapshots } from "@/lib/dashboardStats";
 import { formatRelative } from "@/lib/utils";
-import { readCachedSlugVerdicts } from "@/lib/gemini";
-import { findUsersForBylines, listUsers, type User } from "@/lib/users";
+import { listUsers } from "@/lib/users";
 import { listEditors } from "@/lib/editors";
 import { listSections } from "@/lib/sections";
 import { clampDateToWindow, dayHeaderLabel, todayInIST } from "@/lib/dates";
@@ -19,9 +19,6 @@ export const revalidate = 0;
 const RETENTION_DAYS = 7;
 
 type SearchParams = Promise<{
-  /** 0–23 IST hour. If absent, server auto-picks the latest hour
-   *  with articles. Replaces the old ?page= scheme. */
-  hour?: string;
   date?: string;
 }>;
 
@@ -36,41 +33,25 @@ export default async function Page({
   const istDate = clampDateToWindow(sp.date, RETENTION_DAYS);
   const isToday = istDate === todayInIST();
 
-  // Parse the requested hour if present. Anything missing or invalid
-  // becomes `null` — the server will auto-pick the most recent hour
-  // that actually has articles.
-  let requestedHour: number | null = null;
-  if (typeof sp.hour === "string") {
-    const n = parseInt(sp.hour, 10);
-    if (Number.isFinite(n) && n >= 0 && n < 24) requestedHour = n;
-  }
-
-  const dashboard = await getHourDashboard({
-    date: istDate,
-    requestedHour,
-  });
-
-  // Aggregate stats across all of the chosen day's stored articles, for
-  // the Top Issues panel. Independent of which hour is being viewed.
-  const cachedStats = await getCachedDashboardStats({ date: istDate });
-  const summary = cachedStats ?? dashboard.summary;
-
-  const slugVerdicts = await readCachedSlugVerdicts(
-    dashboard.summary.articles.map((a) => a.sitemap.url),
-  );
-  const matchedUsers = await findUsersForBylines(
-    dashboard.summary.articles.map((a) => a.article.author),
-  );
-  const userMap: Record<string, User | null> = {};
-  dashboard.summary.articles.forEach((a, i) => {
-    userMap[a.sitemap.url] = matchedUsers[i];
-  });
-
-  const [sectionRows, allActiveUsers, allEditors] = await Promise.all([
+  // ONE whole-day read + analysis. Hour-switching and all filtering now
+  // happen client-side over the returned compact list — no per-click
+  // server round-trip (this is the speed + author-filter fix).
+  const [
+    dashboard,
+    sectionRows,
+    allActiveUsers,
+    allEditors,
+    cwvReports,
+    recentSnapshots,
+  ] = await Promise.all([
+    getDayDashboard({ date: istDate }),
     listSections({ activeOnly: true }),
     listUsers(),
     listEditors({ activeOnly: true }),
+    readLatestCwvReports(),
+    readRecentSnapshots(RETENTION_DAYS),
   ]);
+  const summary = dashboard.summary;
   const allCategories = sectionRows.map((s) => ({
     id: s.id,
     label: s.displayName,
@@ -139,6 +120,12 @@ export default async function Page({
         </div>
       </div>
 
+      {/* === DAILY ISSUES TREND === */}
+      <DailyIssuesChart snapshots={recentSnapshots} />
+
+      {/* === CORE WEB VITALS (global, latest nightly run) === */}
+      <CoreWebVitals reports={cwvReports} />
+
       {/* === ISSUES + ARTICLES === */}
       {dashboard.totalForDate === 0 ? (
         <div className="rounded-xl border bg-card p-12 text-center space-y-3">
@@ -173,15 +160,13 @@ export default async function Page({
       ) : (
         <ComplianceSection
           summary={summary}
-          pageArticles={dashboard.summary.articles}
+          articles={dashboard.articles}
           allCategories={allCategories}
           allUsers={allAuthorOptions}
-          slugVerdicts={slugVerdicts}
-          userMap={userMap}
           editorCount={editorCount}
-          hour={dashboard.hour}
           countsPerHour={dashboard.countsPerHour}
           totalForDate={dashboard.totalForDate}
+          defaultHour={dashboard.defaultHour}
         />
       )}
     </div>

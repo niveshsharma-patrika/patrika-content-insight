@@ -19,8 +19,10 @@ import { getConfig } from "@/lib/config";
 import {
   purgeCronRunsOlderThan,
   purgeSnapshotsOlderThan,
+  updateDailySnapshotAggregates,
   writeDailySnapshot,
 } from "@/lib/dashboardStats";
+import { getCachedDashboardStats } from "@/lib/analyze";
 import type { ScrapedArticle, SitemapEntry } from "@/lib/types";
 
 const RETENTION_DAYS = 7;
@@ -539,6 +541,29 @@ async function run(req: Request) {
           nudgesSkipped += 1;
         }
       }
+    }
+
+    // ---- Daily-issues aggregate for the trend graph.
+    //      Recompute the whole day's error/warning totals + average
+    //      scores from stored articles and fold them into today's
+    //      daily_snapshots row. Cheap (one day's analysis) and keeps the
+    //      home-page graph populated going forward. Never fails the run.
+    try {
+      const dayStats = await getCachedDashboardStats({ date: istToday });
+      if (dayStats) {
+        await updateDailySnapshotAggregates(istToday, {
+          analyzed: dayStats.analyzed,
+          errors: dayStats.errors,
+          warnings: dayStats.warnings,
+          avgEditorialScore: dayStats.averageEditorialScore,
+          avgSeoScore: dayStats.averageSeoScore,
+        });
+      }
+    } catch (aggErr) {
+      console.warn(
+        "[cron] daily aggregate update failed:",
+        aggErr instanceof Error ? aggErr.message : String(aggErr),
+      );
     }
 
     // ---- Mark success ----

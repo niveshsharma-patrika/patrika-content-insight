@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { rules } from "@/lib/rules";
 import { setRuleEnabled } from "@/lib/ruleSettings";
+import { requireRole } from "@/lib/session";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -15,6 +16,8 @@ type Ctx = { params: Promise<{ id: string }> };
  * fake rule_ids).
  */
 export async function PATCH(req: Request, { params }: Ctx) {
+  const gate = await requireRole("editor");
+  if (!gate.ok) return gate.response;
   const { id } = await params;
   const known = rules.some((r) => r.id === id);
   if (!known) {

@@ -6,10 +6,13 @@ import { SectionManager } from "@/components/SectionManager";
 import { CronHistory } from "@/components/CronHistory";
 import { GeminiUsage } from "@/components/GeminiUsage";
 import { LogoutButton } from "@/components/LogoutButton";
+import { LoginUserManager } from "@/components/LoginUserManager";
 import { listUsers } from "@/lib/users";
 import { listEditors } from "@/lib/editors";
 import { listSections } from "@/lib/sections";
 import { listCronRuns } from "@/lib/dashboardStats";
+import { getServerSession } from "@/lib/session";
+import { listDashboardUsers } from "@/lib/dashboardUsers";
 import {
   getLifetimeGeminiUsage,
   listGeminiUsage,
@@ -43,6 +46,11 @@ export default async function SettingsPage() {
   const editorialCount = rules.filter((r) => r.scope === "editorial").length;
   const seoCount = rules.filter((r) => r.scope === "seo").length;
 
+  const session = await getServerSession();
+  const isAdmin = session?.role === "admin";
+  // Only admins manage login users — fetch the list just for them.
+  const loginUsers = isAdmin ? await listDashboardUsers() : [];
+
   return (
     <div className="mx-auto max-w-3xl px-6 py-8 space-y-6">
       <Link
@@ -55,13 +63,28 @@ export default async function SettingsPage() {
       <header className="space-y-1">
         <div className="flex items-baseline justify-between gap-3 flex-wrap">
           <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
-          <LogoutButton />
+          <div className="flex items-center gap-3">
+            {session ? (
+              <span className="text-xs text-muted">
+                {session.user} ·{" "}
+                <span className="font-medium capitalize">{session.role}</span>
+              </span>
+            ) : null}
+            <LogoutButton />
+          </div>
         </div>
         <p className="text-sm text-muted">
           Authors directory and the rule catalog used to score every
           article.
         </p>
       </header>
+
+      {isAdmin ? (
+        <LoginUserManager
+          initialUsers={loginUsers}
+          currentUser={session?.user ?? ""}
+        />
+      ) : null}
 
       <section className="space-y-2">
         <h2 className="text-sm font-medium">Authors</h2>

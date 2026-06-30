@@ -11,8 +11,11 @@ import {
 } from "./articleStore";
 import { readDailySnapshot, readLastCronRun } from "./dashboardStats";
 import { getDisabledRuleIds } from "./ruleSettings";
+import { findUsersForBylines } from "./users";
+import { categoryFromUrl } from "./utils";
 import type {
   ArticleAnalysis,
+  ArticleLite,
   DashboardSummary,
   RuleCategory,
   RuleScope,
@@ -283,6 +286,147 @@ export async function getCachedDashboardStats(opts?: {
   return { ...summary, articles: [] };
 }
 
+/** IST clock-hour (0–23) of a UTC timestamp. */
+function istHourOf(ts: string): number {
+  const ms = new Date(ts).getTime();
+  if (!Number.isFinite(ms)) return 0;
+  return new Date(ms + 5.5 * 60 * 60 * 1000).getUTCHours();
+}
+
+/** Project a full analysis down to the client-shippable ArticleLite. */
+function toLite(
+  a: ArticleAnalysis,
+  matchedUser: { id: string; name: string; telegramChatId: string | null } | null,
+): ArticleLite {
+  let path = a.sitemap.url;
+  try {
+    path = new URL(a.sitemap.url).pathname;
+  } catch {
+    /* keep raw url */
+  }
+  const fails = a.results
+    .filter((r) => !r.result.passed)
+    .map((r) => ({
+      ruleId: r.rule.id,
+      scope: r.rule.scope,
+      severity: r.rule.severity,
+      message: r.result.message,
+    }));
+  const sv = a.article.ok ? a.article.slugVerdict : undefined;
+  return {
+    url: a.sitemap.url,
+    path,
+    category: categoryFromUrl(a.sitemap.url),
+    title: a.sitemap.title || a.article.title || "",
+    publishedAt: a.sitemap.publishedAt,
+    hour: istHourOf(a.sitemap.publishedAt),
+    ok: a.article.ok,
+    author: a.article.author ?? null,
+    isUpdated: !!a.isUpdated,
+    score: a.score,
+    editorialScore: a.editorialScore,
+    seoScore: a.seoScore,
+    errorCount: a.errorCount,
+    warningCount: a.warningCount,
+    topIssue: a.topIssue,
+    fails,
+    slug: sv
+      ? { verdict: sv.verdict, score: sv.score, notes: sv.notes }
+      : undefined,
+    matchedUser,
+  };
+}
+
+/**
+ * Whole-day dashboard payload — ONE read + ONE analysis pass for the
+ * entire IST date, projected to compact ArticleLite records. The home
+ * page ships all of these to the client so hour-switching and every
+ * filter (author / section / status / rule) resolve instantly in the
+ * browser, with no per-click server round-trip.
+ *
+ * Replaces the old getHourDashboard + getCachedDashboardStats pair
+ * (which read one hour AND re-read the whole day, double work).
+ */
+export async function getDayDashboard(opts: { date: string }): Promise<{
+  summary: DashboardSummary; // aggregate only; .articles is []
+  articles: ArticleLite[]; // the whole day, compact
+  istDate: string;
+  defaultHour: number; // latest hour with articles
+  totalForDate: number;
+  countsPerHour: number[];
+  sitemapTotalForDate: number;
+  failedToFetch: number;
+  lastCronTickAt: string | null;
+  lastCronStatus: string | null;
+}> {
+  const istDate = opts.date;
+  const stored = await readArticlesForIstDate(istDate);
+
+  const [slugVerdicts, disabledRuleIds, snapshot, lastTick] = await Promise.all([
+    readCachedSlugVerdicts(stored.map((s) => s.entry.url)),
+    getDisabledRuleIds(),
+    readDailySnapshot(istDate),
+    readLastCronRun(),
+  ]);
+
+  const matchedUsers = await findUsersForBylines(
+    stored.map((s) => s.article.author),
+  );
+
+  const analyses = stored.map((s, i) => {
+    const lite = buildAnalysis(
+      s.entry,
+      s.article,
+      slugVerdicts[s.entry.url],
+      s.isUpdated,
+      disabledRuleIds,
+    );
+    return { analysis: lite, user: matchedUsers[i] };
+  });
+
+  const summary = buildSummary(
+    analyses.map((x) => x.analysis),
+    disabledRuleIds,
+  );
+
+  const lite = analyses.map((x) =>
+    toLite(
+      x.analysis,
+      x.user
+        ? {
+            id: x.user.id,
+            name: x.user.name,
+            telegramChatId: x.user.telegramChatId ?? null,
+          }
+        : null,
+    ),
+  );
+
+  const countsPerHour = new Array<number>(24).fill(0);
+  for (const a of lite) countsPerHour[a.hour] += 1;
+
+  let defaultHour = 0;
+  for (let h = 23; h >= 0; h--) {
+    if (countsPerHour[h] > 0) {
+      defaultHour = h;
+      break;
+    }
+  }
+
+  return {
+    summary: { ...summary, articles: [] },
+    articles: lite,
+    istDate,
+    defaultHour,
+    totalForDate: lite.length,
+    countsPerHour,
+    sitemapTotalForDate: snapshot?.totalArticles ?? lite.length,
+    failedToFetch: summary.failedToFetch,
+    lastCronTickAt: lastTick?.finishedAt ?? lastTick?.startedAt ?? null,
+    lastCronStatus: lastTick?.status ?? null,
+  };
+}
+
 function buildSummary(
   articles: ArticleAnalysis[],
   disabledRuleIds: ReadonlySet<string> = new Set(),
@@ -327,6 +471,7 @@ function buildSummary(
     schema: { errors: 0, warnings: 0 },
     eeat: { errors: 0, warnings: 0 },
     discover: { errors: 0, warnings: 0 },
+    amp: { errors: 0, warnings: 0 },
   };
 
   let errors = 0;

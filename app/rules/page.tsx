@@ -20,6 +20,7 @@ const CATEGORY_ORDER = [
   "schema",
   "eeat",
   "discover",
+  "amp",
 ];
 
 function groupByCategory(list: Rule[]): Record<string, Rule[]> {

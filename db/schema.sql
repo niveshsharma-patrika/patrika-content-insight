@@ -227,6 +227,73 @@ CREATE TABLE IF NOT EXISTS rule_overrides (
 );
 
 -- =========================================================================
+-- Core Web Vitals — daily PageSpeed Insights reports.
+--
+-- The midnight-IST cron (/api/cron/cwv) measures two URLs (the Patrika
+-- homepage and the latest published article) on both mobile and desktop
+-- via Google's PSI API, storing one row per (date, page, strategy).
+-- The dashboard home page renders the newest row per (page, strategy).
+-- 7-day retention, same as articles.
+--
+--   page_type : 'home' | 'article'
+--   strategy  : 'mobile' | 'desktop'
+--   *_ms      : Lighthouse LAB metrics (synthetic), milliseconds
+--   cls       : Lighthouse LAB Cumulative Layout Shift (unitless)
+--   field_*   : CrUX real-user p75 FIELD metrics; NULL when Patrika has
+--               no field data for that URL/strategy
+-- =========================================================================
+CREATE TABLE IF NOT EXISTS cwv_reports (
+  id                BIGSERIAL PRIMARY KEY,
+  ist_date          TEXT NOT NULL,        -- YYYY-MM-DD (Asia/Kolkata) of the run
+  page_type         TEXT NOT NULL,        -- 'home' | 'article'
+  strategy          TEXT NOT NULL,        -- 'mobile' | 'desktop'
+  url               TEXT NOT NULL,
+  -- Lighthouse lab
+  performance_score INTEGER,              -- 0–100
+  lcp_ms            INTEGER,
+  cls               NUMERIC,
+  fcp_ms            INTEGER,
+  tbt_ms            INTEGER,
+  speed_index_ms    INTEGER,
+  ttfb_ms           INTEGER,
+  -- CrUX field (real-user p75)
+  field_lcp_ms      INTEGER,
+  field_inp_ms      INTEGER,
+  field_cls         NUMERIC,
+  field_overall     TEXT,                 -- 'FAST' | 'AVERAGE' | 'SLOW'
+  error             TEXT,                 -- set when the PSI call failed
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  -- One report per page+strategy per IST day; re-runs upsert.
+  UNIQUE (ist_date, page_type, strategy)
+);
+
+CREATE INDEX IF NOT EXISTS idx_cwv_reports_date ON cwv_reports(ist_date DESC);
+
+-- =========================================================================
+-- Dashboard login users — per-user accounts with permission tiers.
+--
+-- Separate from app_users (article authors) and editors (Telegram
+-- recipients): these are people who can LOG IN. Passwords are scrypt-
+-- hashed by lib/dashboardUsers.ts (never stored plaintext). The env
+-- DASHBOARD_USERNAME/PASSWORD remains a built-in super-admin break-glass
+-- login, so this table can be empty and the owner still gets in.
+--
+--   role: 'admin'  → full access incl. managing these login users
+--         'editor' → manage authors/sections/editors, toggle rules, notify
+--         'viewer' → read-only
+-- =========================================================================
+CREATE TABLE IF NOT EXISTS dashboard_users (
+  id             TEXT PRIMARY KEY,
+  username       TEXT NOT NULL UNIQUE,
+  password_hash  TEXT NOT NULL,
+  role           TEXT NOT NULL DEFAULT 'viewer',
+  active         BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_dashboard_users_username ON dashboard_users(username);
+
+-- =========================================================================
 -- Row Level Security
 --
 -- Every read and write in this app goes through the SERVICE_ROLE key,
@@ -248,3 +315,5 @@ ALTER TABLE cron_runs        ENABLE ROW LEVEL SECURITY;
 ALTER TABLE daily_snapshots  ENABLE ROW LEVEL SECURITY;
 ALTER TABLE gemini_usage     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE rule_overrides   ENABLE ROW LEVEL SECURITY;
+ALTER TABLE cwv_reports      ENABLE ROW LEVEL SECURITY;
+ALTER TABLE dashboard_users  ENABLE ROW LEVEL SECURITY;

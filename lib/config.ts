@@ -7,6 +7,7 @@
  *   GEMINI_API_KEY     — required for URL slug analysis
  *   GEMINI_MODEL       — optional (defaults to gemini-2.5-flash)
  *   TELEGRAM_BOT_TOKEN — required for author nudges
+ *   PAGESPEED_API_KEY  — optional; raises the Core Web Vitals (PSI) quota
  *
  * The Settings page only shows whether each is set; to change a value,
  * edit `.env.local` (dev) or the Vercel project env vars (prod) and
@@ -19,6 +20,7 @@ export type AppConfig = {
   geminiApiKey?: string;
   geminiModel: string;
   telegramBotToken?: string;
+  pageSpeedApiKey?: string;
 };
 
 export async function getConfig(): Promise<AppConfig> {
@@ -26,6 +28,7 @@ export async function getConfig(): Promise<AppConfig> {
     geminiApiKey: process.env.GEMINI_API_KEY?.trim() || undefined,
     geminiModel: process.env.GEMINI_MODEL?.trim() || DEFAULT_MODEL,
     telegramBotToken: process.env.TELEGRAM_BOT_TOKEN?.trim() || undefined,
+    pageSpeedApiKey: process.env.PAGESPEED_API_KEY?.trim() || undefined,
   };
 }
 

@@ -1,13 +1,6 @@
 "use client";
 
-import { useRouter, useSearchParams } from "next/navigation";
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  useTransition,
-} from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ArticleCard } from "./ArticleCard";
 import { TopIssueCard } from "./TopIssueCard";
 import {
@@ -17,52 +10,64 @@ import {
   type SectionOption,
   type UserOption,
 } from "./FilterBar";
-import type { ArticleAnalysis, DashboardSummary } from "@/lib/types";
-import type { SlugVerdict } from "@/lib/gemini";
-import type { User } from "@/lib/users";
-import { categoryFromUrl } from "@/lib/utils";
+import type { ArticleLite, DashboardSummary } from "@/lib/types";
+
+/** Hour selection: a specific IST hour 0–23, or "all" hours of the day. */
+type HourSel = number | "all";
 
 export function ComplianceSection({
   summary,
-  pageArticles,
+  articles,
   allCategories,
   allUsers = [],
-  slugVerdicts = {},
-  userMap = {},
   editorCount = 0,
-  hour,
   countsPerHour,
   totalForDate,
+  defaultHour,
 }: {
   /** Aggregate stats — used for Top Issues, By Category, KPIs. */
   summary: DashboardSummary;
-  /** Articles published in the chosen IST hour. */
-  pageArticles: ArticleAnalysis[];
+  /** The WHOLE day's articles, compact. Hour-switching + filtering all
+   *  happen client-side over this list — no server round-trip. */
+  articles: ArticleLite[];
   allCategories: SectionOption[];
   /** Active authors — used to populate the Authors filter. */
   allUsers?: UserOption[];
   editorCount?: number;
-  slugVerdicts?: Record<string, SlugVerdict>;
-  userMap?: Record<string, User | null>;
-  /** 0–23 IST hour currently being viewed. */
-  hour: number;
   /** Per-hour article counts for the date (length 24, index = hour). */
   countsPerHour: number[];
   /** Total articles for the day (across all hours). */
   totalForDate: number;
+  /** Latest hour with articles — the initial view. */
+  defaultHour: number;
 }) {
   const [filters, setFilters] = useState<FilterState>(DEFAULT_FILTERS);
+  const [hourSel, setHourSel] = useState<HourSel>(defaultHour);
   const [ruleFilter, setRuleFilter] = useState<{
     id: string;
     title: string;
   } | null>(null);
   const articlesAnchorRef = useRef<HTMLDivElement | null>(null);
 
+  // When the user narrows by author or section, the result almost
+  // certainly spans multiple hours — so widen the hour selection to
+  // "all" automatically. This is the fix for the old bug where picking
+  // an author who didn't publish in the current hour showed nothing.
+  function updateFilters(next: FilterState) {
+    const narrowed =
+      (next.users.length > 0 && filters.users.length === 0) ||
+      (next.sections.length > 0 && filters.sections.length === 0);
+    if (narrowed) setHourSel("all");
+    setFilters(next);
+  }
+
   function selectRule(id: string, title: string) {
     if (ruleFilter?.id === id) {
       setRuleFilter(null);
       return;
     }
+    // A rule can fire in any hour — show matches across the whole day.
+    setHourSel("all");
     setRuleFilter({ id, title });
     setFilters({ ...filters, status: "all" });
   }
@@ -75,34 +80,32 @@ export function ComplianceSection({
     });
   }, [ruleFilter]);
 
-  // ---- Filter pipeline (scope-aware) ----
+  // ---- Filter pipeline (whole-day, scope-aware) ----
   const filtered = useMemo(() => {
-    let list = pageArticles.filter((a) => {
+    let list = articles.filter((a) => {
+      // Hour (skipped when viewing "all")
+      if (hourSel !== "all" && a.hour !== hourSel) return false;
+
       // Section
-      if (
-        filters.sections.length > 0 &&
-        !filters.sections.includes(categoryFromUrl(a.sitemap.url))
-      )
+      if (filters.sections.length > 0 && !filters.sections.includes(a.category))
         return false;
 
-      // Authors — match against the userMap so unknown bylines never
-      // pass when an author filter is active.
+      // Authors — match against the resolved app_users id so unknown
+      // bylines never pass when an author filter is active.
       if (filters.users.length > 0) {
-        const matched = userMap[a.sitemap.url];
-        if (!matched) return false;
-        if (!filters.users.includes(matched.id)) return false;
+        if (!a.matchedUser) return false;
+        if (!filters.users.includes(a.matchedUser.id)) return false;
       }
 
-      // Compute scope-specific failure counts so status filter is correct.
-      const inScope = (scope: "editorial" | "seo") => (r: typeof a.results[number]) =>
-        r.rule.scope === scope;
-      const matchScope =
+      // Scope-specific failure counts so the status filter is correct.
+      const scopeFails =
         filters.scope === "all"
-          ? () => true
-          : inScope(filters.scope);
-      const fails = a.results.filter(matchScope).filter((r) => !r.result.passed);
-      const scopeErrors = fails.filter((r) => r.rule.severity === "error").length;
-      const scopeWarnings = fails.filter((r) => r.rule.severity === "warning").length;
+          ? a.fails
+          : a.fails.filter((f) => f.scope === filters.scope);
+      const scopeErrors = scopeFails.filter((f) => f.severity === "error").length;
+      const scopeWarnings = scopeFails.filter(
+        (f) => f.severity === "warning",
+      ).length;
 
       if (filters.status === "errors" && scopeErrors === 0) return false;
       if (
@@ -112,23 +115,20 @@ export function ComplianceSection({
         return false;
       if (
         filters.status === "clean" &&
-        !(a.article.ok && scopeErrors === 0 && scopeWarnings === 0)
+        !(a.ok && scopeErrors === 0 && scopeWarnings === 0)
       )
         return false;
-      if (filters.status === "fetch_failed" && a.article.ok) return false;
+      if (filters.status === "fetch_failed" && a.ok) return false;
 
       // Rule filter (set from clicking a top-issue card)
-      if (ruleFilter) {
-        const failing = a.results.some(
-          (r) => r.rule.id === ruleFilter.id && !r.result.passed,
-        );
-        if (!failing) return false;
-      }
+      if (ruleFilter && !a.fails.some((f) => f.ruleId === ruleFilter.id))
+        return false;
+
       return true;
     });
 
     // Sort — use scope-specific score when scope is set.
-    const scoreFor = (a: ArticleAnalysis) =>
+    const scoreFor = (a: ArticleLite) =>
       filters.scope === "editorial"
         ? a.editorialScore
         : filters.scope === "seo"
@@ -141,16 +141,19 @@ export function ComplianceSection({
       list = [...list].sort((a, b) => scoreFor(b) - scoreFor(a));
     else if (filters.sort === "recent")
       list = [...list].sort((a, b) =>
-        a.sitemap.publishedAt < b.sitemap.publishedAt ? 1 : -1,
+        a.publishedAt < b.publishedAt ? 1 : -1,
       );
     else if (filters.sort === "issues-desc")
-      list = [...list].sort((a, b) => {
-        const ai = a.results.filter((r) => !r.result.passed).length;
-        const bi = b.results.filter((r) => !r.result.passed).length;
-        return bi - ai;
-      });
+      list = [...list].sort((a, b) => b.fails.length - a.fails.length);
     return list;
-  }, [pageArticles, filters, ruleFilter]);
+  }, [articles, filters, ruleFilter, hourSel]);
+
+  // Count for the current hour selection (before author/section/status
+  // filters) — drives the sub-header.
+  const inHourCount =
+    hourSel === "all"
+      ? totalForDate
+      : countsPerHour[hourSel] ?? 0;
 
   // Top issues filtered by scope so the panel matches the active scope filter
   const topViolations = useMemo(() => {
@@ -173,10 +176,7 @@ export function ComplianceSection({
               an issue to filter the list below.
             </p>
           </div>
-          <a
-            href="/rules"
-            className="text-sm text-muted hover:text-foreground"
-          >
+          <a href="/rules" className="text-sm text-muted hover:text-foreground">
             Rule catalog →
           </a>
         </div>
@@ -202,30 +202,46 @@ export function ComplianceSection({
       </section>
 
       {/* === ARTICLE CARDS === */}
-      <section
-        ref={articlesAnchorRef}
-        id="articles-anchor"
-        className="space-y-3"
-      >
+      <section ref={articlesAnchorRef} id="articles-anchor" className="space-y-3">
         <div className="flex items-baseline justify-between gap-3 flex-wrap">
           <div>
             <h2 className="text-lg font-semibold tracking-tight">
-              Articles · {formatHourRange(hour)}
+              Articles ·{" "}
+              {hourSel === "all" ? "All hours" : formatHourRange(hourSel)}
             </h2>
             <p className="text-xs text-muted mt-0.5">
-              Showing {pageArticles.length} article
-              {pageArticles.length === 1 ? "" : "s"} published in this
-              hour · {totalForDate.toLocaleString()} total for the day
+              {hourSel === "all" ? (
+                <>
+                  Showing {filtered.length.toLocaleString()} of{" "}
+                  {totalForDate.toLocaleString()} articles for the day
+                </>
+              ) : (
+                <>
+                  {inHourCount} article{inHourCount === 1 ? "" : "s"} published in
+                  this hour · {totalForDate.toLocaleString()} total for the day
+                </>
+              )}
             </p>
           </div>
         </div>
 
-        <HourStrip activeHour={hour} countsPerHour={countsPerHour} />
+        <HourStrip
+          hourSel={hourSel}
+          countsPerHour={countsPerHour}
+          totalForDate={totalForDate}
+          onPick={(h) => {
+            setHourSel(h);
+            articlesAnchorRef.current?.scrollIntoView({
+              behavior: "smooth",
+              block: "start",
+            });
+          }}
+        />
 
         <FilterBar
           state={filters}
-          setState={setFilters}
-          totalOnPage={pageArticles.length}
+          setState={updateFilters}
+          totalOnPage={hourSel === "all" ? totalForDate : inHourCount}
           allCategories={allCategories}
           allUsers={allUsers}
           resultCount={filtered.length}
@@ -254,41 +270,30 @@ export function ComplianceSection({
 
         {filtered.length === 0 ? (
           <div className="rounded-xl border bg-card p-12 text-center text-sm text-muted">
-            {ruleFilter ? (
-              "No articles in this hour fail this rule. Try another hour."
-            ) : pageArticles.length === 0 ? (
-              <>
-                Nothing was published in{" "}
-                <span className="font-medium text-foreground">
-                  {formatHourRange(hour)}
-                </span>{" "}
-                IST. Pick a different hour above.
-              </>
-            ) : (
-              "No articles in this hour match these filters."
-            )}
+            {ruleFilter
+              ? "No articles fail this rule today. Clear the rule filter to see all."
+              : totalForDate === 0
+                ? "Nothing scraped for this day yet."
+                : "No articles match these filters. Try widening them or switching to All hours."}
           </div>
         ) : (
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
             {filtered.map((a) => (
               <ArticleCard
-                key={a.sitemap.url}
+                key={a.url}
                 a={a}
                 ruleFilterId={ruleFilter?.id ?? null}
-                slugVerdict={slugVerdicts[a.sitemap.url]}
-                matchedUser={userMap[a.sitemap.url] ?? null}
                 editorCount={editorCount}
               />
             ))}
           </div>
         )}
-
       </section>
     </div>
   );
 }
 
-/* ---------------- Hour pagination ---------------- */
+/* ---------------- Hour selection ---------------- */
 
 function formatHourRange(hour: number): string {
   return `${formatIstHour(hour)} – ${formatIstHour((hour + 1) % 24)}`;
@@ -307,67 +312,60 @@ function shortHourLabel(hour: number): string {
 }
 
 function HourStrip({
-  activeHour,
+  hourSel,
   countsPerHour,
+  totalForDate,
+  onPick,
 }: {
-  activeHour: number;
+  hourSel: HourSel;
   countsPerHour: number[];
+  totalForDate: number;
+  onPick: (h: HourSel) => void;
 }) {
-  // useTransition so the user sees feedback while the next hour's
-  // server render is in flight. Same approach as the old page-based
-  // Pagination but applied per-hour-button.
-  const router = useRouter();
-  const params = useSearchParams();
-  const [pending, startTransition] = useTransition();
-  const [pendingHour, setPendingHour] = useState<number | null>(null);
-
-  function go(h: number) {
-    setPendingHour(h);
-    const merged = new URLSearchParams(params?.toString() ?? "");
-    merged.set("hour", String(h));
-    startTransition(() => {
-      router.push(`/?${merged.toString()}`, { scroll: false });
-      setTimeout(() => {
-        document
-          .getElementById("articles-anchor")
-          ?.scrollIntoView({ behavior: "smooth", block: "start" });
-      }, 0);
-    });
-  }
-
+  // Pure client-side hour switching — instant, no server round-trip.
   return (
     <nav
       aria-label="Pick an hour"
-      className={`grid grid-cols-6 sm:grid-cols-8 lg:grid-cols-12 gap-1.5 ${
-        pending ? "opacity-70" : ""
-      }`}
-      aria-busy={pending}
+      className="grid grid-cols-6 sm:grid-cols-8 lg:grid-cols-12 gap-1.5"
     >
+      <button
+        type="button"
+        aria-current={hourSel === "all" ? "page" : undefined}
+        onClick={() => onPick("all")}
+        className={
+          hourSel === "all"
+            ? "rounded-md bg-foreground text-background px-2 py-1.5 text-xs font-medium tabular-nums"
+            : "rounded-md border bg-card hover:bg-stone-50 px-2 py-1.5 text-xs text-foreground tabular-nums"
+        }
+        title={`All hours · ${totalForDate} article${totalForDate === 1 ? "" : "s"}`}
+      >
+        <span className="block leading-none">All</span>
+        <span
+          className={`block text-[10px] mt-0.5 leading-none ${
+            hourSel === "all" ? "opacity-80" : "text-muted"
+          }`}
+        >
+          {totalForDate}
+        </span>
+      </button>
       {Array.from({ length: 24 }, (_, h) => {
         const count = countsPerHour[h] ?? 0;
-        const isActive = h === activeHour;
-        const isPending = pending && pendingHour === h;
+        const isActive = h === hourSel;
         const isEmpty = count === 0;
-        // Empty-hour buttons can't show anything useful — disable
-        // them so editors don't click into a known-blank view. The
-        // active button stays clickable so users can still see they
-        // are on it.
-        const disabled = pending || (isEmpty && !isActive);
+        const disabled = isEmpty && !isActive;
         return (
           <button
             key={h}
             type="button"
             disabled={disabled}
             aria-current={isActive ? "page" : undefined}
-            onClick={() => go(h)}
+            onClick={() => onPick(h)}
             className={
               isActive
                 ? "rounded-md bg-foreground text-background px-2 py-1.5 text-xs font-medium tabular-nums"
-                : isPending
-                  ? "rounded-md border bg-stone-100 text-muted px-2 py-1.5 text-xs tabular-nums"
-                  : isEmpty
-                    ? "rounded-md border bg-card text-muted-foreground/60 px-2 py-1.5 text-xs tabular-nums hover:bg-stone-50"
-                    : "rounded-md border bg-card hover:bg-stone-50 px-2 py-1.5 text-xs text-foreground tabular-nums"
+                : isEmpty
+                  ? "rounded-md border bg-card text-muted-foreground/60 px-2 py-1.5 text-xs tabular-nums"
+                  : "rounded-md border bg-card hover:bg-stone-50 px-2 py-1.5 text-xs text-foreground tabular-nums"
             }
             title={`${formatHourRange(h)} · ${count} article${count === 1 ? "" : "s"}`}
           >
@@ -389,4 +387,3 @@ function HourStrip({
     </nav>
   );
 }
-

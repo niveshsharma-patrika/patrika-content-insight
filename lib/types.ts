@@ -150,6 +150,34 @@ export type ScrapedArticle = {
   thirdPartyScriptCount?: number;
   /** Value of <link rel="amphtml" href="..."> if present. */
   ampUrl?: string;
+  /** Result of fetching + analyzing the AMP version, when ampUrl exists. */
+  amp?: AmpReport;
+};
+
+/**
+ * Analysis of an article's AMP (Accelerated Mobile Pages) version,
+ * fetched separately from `ampUrl`. Drives the `amp` category rules:
+ * structural validation, AMP↔canonical content parity, schema parity,
+ * and embed preservation. `fetched=false` means we couldn't retrieve
+ * the AMP page (network/no ampUrl) — rules treat that as "not checked".
+ */
+export type AmpReport = {
+  /** The amphtml URL we fetched. */
+  url: string;
+  fetched: boolean;
+  error?: string;
+  /** No structural/critical AMP errors found (heuristic validator). */
+  valid: boolean;
+  /** Human-readable critical issues; empty when valid. */
+  criticalErrors: string[];
+  /** Body word count on the AMP page (for content-parity check). */
+  wordCount: number;
+  hasNewsArticle: boolean;
+  schemaType?: string;
+  schemaHeadline?: string;
+  schemaDatePublished?: string;
+  /** Count of amp-* media/social embeds (amp-youtube, amp-twitter, …). */
+  embedCount: number;
 };
 
 export type Severity = "error" | "warning" | "info";
@@ -167,7 +195,8 @@ export type RuleCategory =
   | "seo"
   | "schema"
   | "eeat"
-  | "discover";
+  | "discover"
+  | "amp";
 
 export type RuleResult = {
   passed: boolean;
@@ -212,6 +241,56 @@ export type ArticleAnalysis = {
   /** True if the cron has scraped this URL more than once — Patrika
    *  bumped its publish-time, indicating an edit / re-publish. */
   isUpdated?: boolean;
+};
+
+/**
+ * Compact, client-shippable projection of an ArticleAnalysis. The
+ * dashboard loads a WHOLE DAY of these at once so hour-switching and
+ * filtering (author / section / status / rule) happen instantly in the
+ * browser with no server round-trip. Carries only the fields the grid
+ * cards and the client filter pipeline need — crucially the FAILED
+ * rules only (a handful per article) instead of all 73 results, so a
+ * 300-article day stays a few hundred KB, not several MB.
+ */
+export type ArticleLite = {
+  url: string;
+  /** URL pathname, precomputed for display. */
+  path: string;
+  /** Section slug (first path segment), precomputed. */
+  category: string;
+  title: string;
+  publishedAt: string;
+  /** IST clock-hour 0–23, precomputed for the hour strip + filter. */
+  hour: number;
+  ok: boolean;
+  author: string | null;
+  isUpdated: boolean;
+  score: number;
+  editorialScore: number;
+  seoScore: number;
+  errorCount: number;
+  warningCount: number;
+  topIssue?: ArticleAnalysis["topIssue"];
+  /** Only the rules this article FAILS — drives the status/scope filter,
+   *  the rule-click filter, and the card's "failing rule" line. */
+  fails: Array<{
+    ruleId: string;
+    scope: RuleScope;
+    severity: Severity;
+    message?: string;
+  }>;
+  /** Cached Gemini slug verdict, if any. */
+  slug?: {
+    verdict: "clear" | "hinglish" | "gibberish";
+    score: number;
+    notes?: string;
+  };
+  /** Author resolved to an app_users row, if matched. */
+  matchedUser?: {
+    id: string;
+    name: string;
+    telegramChatId: string | null;
+  } | null;
 };
 
 export type DashboardSummary = {

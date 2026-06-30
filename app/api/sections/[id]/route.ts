@@ -1,9 +1,12 @@
 import { NextResponse } from "next/server";
 import { updateSection } from "@/lib/sections";
+import { requireRole } from "@/lib/session";
 
 type Ctx = { params: Promise<{ id: string }> };
 
 export async function PATCH(req: Request, { params }: Ctx) {
+  const gate = await requireRole("editor");
+  if (!gate.ok) return gate.response;
   const { id } = await params;
   const body = (await req.json().catch(() => null)) as Record<
     string,

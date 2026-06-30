@@ -1688,6 +1688,104 @@ export const rules: Rule[] = [
       );
     },
   },
+
+  // ---------- AMP (Accelerated Mobile Pages) ----------
+  // These compare the article's AMP version (fetched separately by the
+  // scraper) against the canonical page. When an article has no AMP
+  // version, or the AMP page couldn't be fetched, the checks pass (they
+  // don't penalize the absence of AMP — that's a separate decision).
+  {
+    id: "amp-valid-no-critical",
+    category: "amp",
+    scope: "seo",
+    title: "AMP page has no critical validation errors",
+    severity: "warning",
+    description:
+      "AMP version must be structurally valid (AMP runtime + boilerplate, a canonical link, no raw <img>/author <script>). Invalid AMP is dropped from Google's AMP cache and mobile Top Stories.",
+    reference: "https://amp.dev/documentation/guides-and-tutorials/learn/validation-workflow/validate_amp/",
+    check: (a) => {
+      const amp = a.amp;
+      if (!amp || !amp.fetched) return ok(); // no AMP / not fetched → skip
+      if (amp.valid) return ok();
+      return fail(
+        `AMP has ${amp.criticalErrors.length} critical issue${amp.criticalErrors.length === 1 ? "" : "s"}`,
+        amp.criticalErrors.join(" · "),
+      );
+    },
+  },
+  {
+    id: "amp-canonical-content-match",
+    category: "amp",
+    scope: "seo",
+    title: "AMP and canonical content should match",
+    severity: "warning",
+    description:
+      "Google requires AMP and canonical pages to carry the same primary content. A large body-text gap between the two risks an 'AMP/canonical mismatch' and cache rejection.",
+    reference: "https://developers.google.com/search/docs/crawling-indexing/amp",
+    check: (a) => {
+      const amp = a.amp;
+      if (!amp || !amp.fetched) return ok();
+      const canonical = a.wordCount ?? 0;
+      if (canonical < 50 || amp.wordCount < 50) return ok(); // too thin to compare
+      const ratio = amp.wordCount / canonical;
+      // AMP within 70–130% of canonical word count is "matching".
+      if (ratio >= 0.7 && ratio <= 1.3) return ok();
+      return fail(
+        `AMP body ${amp.wordCount} words vs canonical ${canonical} (${Math.round(ratio * 100)}%)`,
+      );
+    },
+  },
+  {
+    id: "amp-schema-match",
+    category: "amp",
+    scope: "seo",
+    title: "AMP and canonical structured data should match",
+    severity: "warning",
+    description:
+      "Both the AMP and non-AMP versions must expose equivalent NewsArticle structured data (same headline + datePublished). Mismatched schema between the two is a common AMP rejection cause.",
+    reference: "https://developers.google.com/search/docs/appearance/structured-data",
+    check: (a) => {
+      const amp = a.amp;
+      if (!amp || !amp.fetched) return ok();
+      const canon = a.structuredData;
+      if (!canon.hasArticle) return ok(); // canonical schema rules cover this
+      if (!amp.hasNewsArticle)
+        return fail("AMP page has no NewsArticle/Article JSON-LD (canonical does)");
+      const norm = (s?: string) => (s ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+      if (canon.headline && amp.schemaHeadline && norm(canon.headline) !== norm(amp.schemaHeadline))
+        return fail(
+          "AMP schema headline differs from canonical",
+          `canonical: "${canon.headline}" · amp: "${amp.schemaHeadline}"`,
+        );
+      if (
+        canon.datePublished &&
+        amp.schemaDatePublished &&
+        norm(canon.datePublished) !== norm(amp.schemaDatePublished)
+      )
+        return fail("AMP schema datePublished differs from canonical");
+      return ok();
+    },
+  },
+  {
+    id: "amp-embed-preserved",
+    category: "amp",
+    scope: "seo",
+    title: "Embeds should be preserved on AMP",
+    severity: "info",
+    description:
+      "Video/social embeds on the canonical article should also appear (as amp-* components) on the AMP version, or readers lose them on mobile. The message reports both embed counts.",
+    check: (a) => {
+      const amp = a.amp;
+      if (!amp || !amp.fetched) return ok();
+      const canonicalEmbeds = a.embeds.length;
+      if (canonicalEmbeds === 0)
+        return ok(); // nothing to preserve
+      if (amp.embedCount >= canonicalEmbeds) return ok();
+      return fail(
+        `AMP has ${amp.embedCount} embed${amp.embedCount === 1 ? "" : "s"} vs ${canonicalEmbeds} on canonical`,
+      );
+    },
+  },
 ];
 
 /**

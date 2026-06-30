@@ -1,47 +1,37 @@
 import Link from "next/link";
 import { Badge } from "./Badge";
 import { NotifyAuthorButton } from "./NotifyAuthorButton";
-import type { ArticleAnalysis } from "@/lib/types";
-import type { SlugVerdict } from "@/lib/gemini";
-import type { User } from "@/lib/users";
+import type { ArticleLite } from "@/lib/types";
 import { articleId } from "@/lib/articleId";
-import { categoryFromUrl, formatRelative } from "@/lib/utils";
+import { formatRelative } from "@/lib/utils";
 
 export function ArticleCard({
   a,
   ruleFilterId = null,
-  slugVerdict,
-  matchedUser = null,
   editorCount = 0,
 }: {
-  a: ArticleAnalysis;
+  a: ArticleLite;
   ruleFilterId?: string | null;
-  slugVerdict?: SlugVerdict;
-  matchedUser?: User | null;
   editorCount?: number;
 }) {
-  const id = articleId(a.sitemap.url);
-  const cat = categoryFromUrl(a.sitemap.url);
-  const ok = a.article.ok;
+  const id = articleId(a.url);
+  const cat = a.category;
+  const ok = a.ok;
 
   let inlineIssue = a.topIssue?.message ?? a.topIssue?.title;
   let inlineSeverity: "error" | "warning" | "info" | undefined =
     a.topIssue?.severity;
   if (ruleFilterId) {
-    const r = a.results.find((x) => x.rule.id === ruleFilterId);
-    if (r && !r.result.passed) {
-      inlineIssue = r.result.message ?? r.rule.title;
-      inlineSeverity = r.rule.severity;
+    const r = a.fails.find((x) => x.ruleId === ruleFilterId);
+    if (r) {
+      inlineIssue = r.message ?? ruleFilterId;
+      inlineSeverity = r.severity;
     }
   }
 
-  const path = (() => {
-    try {
-      return new URL(a.sitemap.url).pathname;
-    } catch {
-      return a.sitemap.url;
-    }
-  })();
+  const path = a.path;
+  const slugVerdict = a.slug;
+  const matchedUser = a.matchedUser ?? null;
 
   // Visual highlight for low-scoring articles. Cards below 75% editorial
   // score get a red-tinted border + faint red wash so editors can scan
@@ -59,9 +49,7 @@ export function ArticleCard({
       <div className="px-4 pt-3.5 pb-2 flex items-center gap-2 text-xs text-muted flex-wrap border-b">
         <span className="capitalize font-medium text-foreground">{cat}</span>
         <span className="text-stone-300">·</span>
-        <span suppressHydrationWarning>
-          {formatRelative(a.sitemap.publishedAt)}
-        </span>
+        <span suppressHydrationWarning>{formatRelative(a.publishedAt)}</span>
         {a.isUpdated ? (
           <span
             className="inline-flex items-center rounded-full bg-amber-100 text-amber-800 ring-1 ring-inset ring-amber-200 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide"
@@ -87,9 +75,9 @@ export function ArticleCard({
       <div className="px-4 py-3 flex-1 flex flex-col gap-2">
         <h3
           className="font-medium text-[15px] leading-snug line-clamp-2"
-          title={a.sitemap.title}
+          title={a.title}
         >
-          {a.sitemap.title || a.article.title || "(untitled)"}
+          {a.title || "(untitled)"}
         </h3>
         <div className="font-mono text-[11px] text-muted truncate" title={path}>
           {path}
@@ -144,25 +132,28 @@ export function ArticleCard({
       </div>
 
       {/* byline strip */}
-      {a.article.author ? (
+      {a.author ? (
         <div className="px-4 py-1.5 border-t bg-stone-50/30 flex items-center justify-between gap-2 text-xs">
           <span className="text-muted truncate">
             <span className="text-[10px] uppercase tracking-wide text-muted-foreground mr-1">
               by
             </span>
-            <span className="font-medium text-foreground">
-              {a.article.author}
-            </span>
+            <span className="font-medium text-foreground">{a.author}</span>
             {matchedUser ? (
-              <span className="text-muted">
-                {" "}· mapped → {matchedUser.name}
-              </span>
+              <span className="text-muted"> · mapped → {matchedUser.name}</span>
             ) : null}
           </span>
           <NotifyAuthorButton
             articleId={id}
-            authorName={a.article.author}
-            matchedUser={matchedUser}
+            authorName={a.author}
+            matchedUser={
+              matchedUser
+                ? {
+                    name: matchedUser.name,
+                    telegramChatId: matchedUser.telegramChatId ?? undefined,
+                  }
+                : null
+            }
             editorialScore={a.editorialScore}
             editorCount={editorCount}
             size="sm"
@@ -180,7 +171,7 @@ export function ArticleCard({
           <span aria-hidden="true">→</span>
         </Link>
         <a
-          href={a.sitemap.url}
+          href={a.url}
           target="_blank"
           rel="noreferrer"
           className="text-xs text-muted hover:text-foreground transition flex items-center gap-1"

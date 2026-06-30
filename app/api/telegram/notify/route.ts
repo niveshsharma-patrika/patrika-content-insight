@@ -7,6 +7,7 @@ import {
   isTelegramConfigured,
   sendTelegramMessage,
 } from "@/lib/telegram";
+import { requireRole } from "@/lib/session";
 
 /**
  * Manual "Notify" trigger from the dashboard. Fan-out rules match
@@ -19,6 +20,8 @@ import {
  * Returns a list of who was sent and who was skipped (with reason).
  */
 export async function POST(req: Request) {
+  const gate = await requireRole("editor");
+  if (!gate.ok) return gate.response;
   const body = (await req.json().catch(() => null)) as Record<
     string,
     unknown
