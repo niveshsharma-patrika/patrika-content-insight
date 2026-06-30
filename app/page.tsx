@@ -150,11 +150,9 @@ export default async function Page({
         />
       ) : null}
 
-      {/* === TRENDS: daily issues + core web vitals (side by side on wide) === */}
-      <div className="grid gap-6 xl:grid-cols-2 items-start">
-        <DailyIssuesChart snapshots={recentSnapshots} />
-        <CoreWebVitals reports={cwvReports} />
-      </div>
+      {/* === TRENDS (full width — heights differ too much to pair) === */}
+      <DailyIssuesChart snapshots={recentSnapshots} />
+      <CoreWebVitals reports={cwvReports} />
 
       {/* === ISSUES + ARTICLES === */}
       {dashboard.totalForDate === 0 ? (

@@ -56,7 +56,7 @@ export function DailyIssuesChart({ snapshots }: { snapshots: DailySnapshot[] }) 
               return (
                 <div
                   key={s.date}
-                  className="flex-1 flex flex-col items-center gap-1.5 h-full justify-end"
+                  className="w-16 flex flex-col items-center gap-1.5 h-full justify-end"
                   title={`${dayChipLabel(s.date)} · ${errors} errors · ${warnings} warnings${
                     s.avgEditorialScore != null
                       ? ` · avg editorial ${s.avgEditorialScore}%`
@@ -85,7 +85,7 @@ export function DailyIssuesChart({ snapshots }: { snapshots: DailySnapshot[] }) 
           {/* x-axis: day labels + avg editorial score */}
           <div className="flex items-start gap-2 sm:gap-3 mt-2 border-t pt-2">
             {days.map((s) => (
-              <div key={s.date} className="flex-1 text-center">
+              <div key={s.date} className="w-16 text-center">
                 <div className="text-[10px] text-muted leading-tight">
                   {dayChipLabel(s.date)}
                 </div>

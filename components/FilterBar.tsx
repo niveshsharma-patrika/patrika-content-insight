@@ -92,7 +92,10 @@ export function FilterBar({
     state.users.length === 0;
 
   return (
-    <div className="rounded-xl border bg-card overflow-hidden">
+    // NOTE: no `overflow-hidden` here — it would clip the Sections/Authors
+    // dropdown menus (which are absolutely positioned and extend below the
+    // bar). The chips strip rounds its own bottom corners instead.
+    <div className="rounded-xl border bg-card">
       {/* Filter row: every control inline including Sections */}
       <div className="flex flex-wrap items-end gap-3 px-4 py-3">
         <Field label="Status" htmlFor="f-status">
@@ -178,7 +181,7 @@ export function FilterBar({
       </div>
 
       {/* Active filter chips strip */}
-      <div className="border-t px-4 py-2 bg-stone-50/40 flex items-center gap-2 flex-wrap">
+      <div className="border-t px-4 py-2 bg-stone-50/40 rounded-b-xl flex items-center gap-2 flex-wrap">
         <span className="text-[11px] text-muted">
           <span className="font-medium tabular-nums text-foreground">
             {resultCount}
