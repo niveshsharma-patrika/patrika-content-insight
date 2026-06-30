@@ -169,7 +169,8 @@ export default async function Page({
           editorCount={editorCount}
           countsPerHour={dashboard.countsPerHour}
           totalForDate={dashboard.totalForDate}
-          defaultHour={dashboard.defaultHour}
+          isToday={isToday}
+          dateLabel={isToday ? undefined : dayHeaderLabel(istDate)}
         />
       )}
     </div>

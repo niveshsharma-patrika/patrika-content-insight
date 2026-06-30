@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArticleCard } from "./ArticleCard";
 import { TopIssueCard } from "./TopIssueCard";
@@ -23,7 +24,8 @@ export function ComplianceSection({
   editorCount = 0,
   countsPerHour,
   totalForDate,
-  defaultHour,
+  isToday = true,
+  dateLabel,
 }: {
   /** Aggregate stats — used for Top Issues, By Category, KPIs. */
   summary: DashboardSummary;
@@ -38,16 +40,30 @@ export function ComplianceSection({
   countsPerHour: number[];
   /** Total articles for the day (across all hours). */
   totalForDate: number;
-  /** Latest hour with articles — the initial view. */
-  defaultHour: number;
+  /** Whether the viewed date is today (controls the "Today" button). */
+  isToday?: boolean;
+  /** Short label for the viewed date, e.g. "Jun 30" — used in messages. */
+  dateLabel?: string;
 }) {
+  const router = useRouter();
   const [filters, setFilters] = useState<FilterState>(DEFAULT_FILTERS);
-  const [hourSel, setHourSel] = useState<HourSel>(defaultHour);
+  // Default view = ALL of the day's articles (not a single hour), so the
+  // dashboard lands showing everything. Hour buttons narrow from there.
+  const [hourSel, setHourSel] = useState<HourSel>("all");
   const [ruleFilter, setRuleFilter] = useState<{
     id: string;
     title: string;
   } | null>(null);
   const articlesAnchorRef = useRef<HTMLDivElement | null>(null);
+
+  // "Today" reset: clear all filters, show all hours, and jump to today's
+  // date if we're viewing an archive day.
+  function goToday() {
+    setFilters(DEFAULT_FILTERS);
+    setRuleFilter(null);
+    setHourSel("all");
+    if (!isToday) router.push("/");
+  }
 
   // When the user narrows by author or section, the result almost
   // certainly spans multiple hours — so widen the hour selection to
@@ -223,6 +239,15 @@ export function ComplianceSection({
               )}
             </p>
           </div>
+          {/* Reset to today + all articles (clears hour/filter/date). */}
+          <button
+            type="button"
+            onClick={goToday}
+            className="self-center rounded-md bg-foreground text-background px-3 py-1.5 text-xs font-medium hover:bg-stone-800 whitespace-nowrap"
+            title="Show all of today's articles"
+          >
+            Today · all articles
+          </button>
         </div>
 
         <HourStrip
@@ -270,11 +295,24 @@ export function ComplianceSection({
 
         {filtered.length === 0 ? (
           <div className="rounded-xl border bg-card p-12 text-center text-sm text-muted">
-            {ruleFilter
-              ? "No articles fail this rule today. Clear the rule filter to see all."
-              : totalForDate === 0
-                ? "Nothing scraped for this day yet."
-                : "No articles match these filters. Try widening them or switching to All hours."}
+            {ruleFilter ? (
+              "No articles fail this rule today. Clear the rule filter to see all."
+            ) : totalForDate === 0 ? (
+              "Nothing scraped for this day yet."
+            ) : filters.users.length > 0 ? (
+              <>
+                No articles from{" "}
+                <span className="font-medium text-foreground">
+                  {filters.users
+                    .map((id) => allUsers.find((u) => u.id === id)?.label ?? id)
+                    .join(", ")}
+                </span>{" "}
+                on {dateLabel ?? (isToday ? "today" : "this day")}. Try another
+                date, or clear the author filter.
+              </>
+            ) : (
+              "No articles match these filters. Try widening them or switching to All hours."
+            )}
           </div>
         ) : (
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
