@@ -44,12 +44,15 @@ export default async function Page({
     cwvReports,
     recentSnapshots,
   ] = await Promise.all([
+    // getDayDashboard already degrades to an empty dashboard on DB error.
+    // Make the side reads fail-soft too so a DB outage never crashes the
+    // page — it renders the empty state instead.
     getDayDashboard({ date: istDate }),
-    listSections({ activeOnly: true }),
-    listUsers(),
-    listEditors({ activeOnly: true }),
-    readLatestCwvReports(),
-    readRecentSnapshots(RETENTION_DAYS),
+    listSections({ activeOnly: true }).catch(() => []),
+    listUsers().catch(() => []),
+    listEditors({ activeOnly: true }).catch(() => []),
+    readLatestCwvReports().catch(() => []),
+    readRecentSnapshots(RETENTION_DAYS).catch(() => []),
   ]);
   const summary = dashboard.summary;
   const allCategories = sectionRows.map((s) => ({

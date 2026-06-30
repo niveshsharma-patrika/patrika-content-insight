@@ -360,6 +360,7 @@ export async function getDayDashboard(opts: { date: string }): Promise<{
   lastCronStatus: string | null;
 }> {
   const istDate = opts.date;
+  try {
   const stored = await readArticlesForIstDate(istDate);
 
   const [slugVerdicts, disabledRuleIds, snapshot, lastTick] = await Promise.all([
@@ -425,6 +426,26 @@ export async function getDayDashboard(opts: { date: string }): Promise<{
     lastCronTickAt: lastTick?.finishedAt ?? lastTick?.startedAt ?? null,
     lastCronStatus: lastTick?.status ?? null,
   };
+  } catch (err) {
+    // DB unreachable (firewall/outage). Render an empty dashboard (the
+    // "nothing scraped yet" state) instead of crashing the whole page.
+    console.error(
+      "[analyze.getDayDashboard] DB read failed; rendering empty dashboard:",
+      err instanceof Error ? err.message : String(err),
+    );
+    return {
+      summary: buildSummary([]),
+      articles: [],
+      istDate,
+      defaultHour: 0,
+      totalForDate: 0,
+      countsPerHour: new Array<number>(24).fill(0),
+      sitemapTotalForDate: 0,
+      failedToFetch: 0,
+      lastCronTickAt: null,
+      lastCronStatus: null,
+    };
+  }
 }
 
 function buildSummary(

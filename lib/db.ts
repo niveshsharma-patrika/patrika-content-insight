@@ -61,7 +61,11 @@ export function getPool(): Pool | null {
         : { rejectUnauthorized: false },
     max: Number(process.env.PG_POOL_MAX ?? 10),
     idleTimeoutMillis: 30_000,
-    connectionTimeoutMillis: 15_000,
+    // Fail fast when the DB is unreachable (e.g. firewall) so requests
+    // don't hang for 15s each — login falls back to the env admin
+    // quickly and pages render their empty state instead of stalling.
+    connectionTimeoutMillis: Number(process.env.PG_CONNECT_TIMEOUT_MS ?? 4_000),
+    query_timeout: Number(process.env.PG_QUERY_TIMEOUT_MS ?? 12_000),
   });
   _pool.on("error", (err) => {
     console.error("[db] idle client error:", err.message);
