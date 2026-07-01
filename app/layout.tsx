@@ -3,7 +3,7 @@ import "./globals.css";
 import { HeaderNav } from "@/components/HeaderNav";
 
 export const metadata: Metadata = {
-  title: "Patrika Content Insight",
+  title: "Patrika Enigma",
   description:
     "Editorial QA, realtime analytics, and notifications for Patrika.com.",
 };

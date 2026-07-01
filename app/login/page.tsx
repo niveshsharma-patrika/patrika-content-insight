@@ -1,7 +1,9 @@
+import Image from "next/image";
 import { LoginForm } from "./LoginForm";
+import { EnigmaWordmark } from "@/components/EnigmaLogo";
 
 export const metadata = {
-  title: "Sign in · Patrika Content Insight",
+  title: "Sign in · Patrika Enigma",
 };
 
 // Never cache the login page — it's tiny and we want any visit to
@@ -27,10 +29,20 @@ export default async function LoginPage({
   return (
     <div className="min-h-[calc(100vh-8rem)] flex items-center justify-center px-6 py-12">
       <div className="w-full max-w-sm space-y-6">
-        <div className="text-center space-y-2">
-          <h1 className="text-2xl font-semibold tracking-tight">
-            Patrika Content Insight
-          </h1>
+        <div className="text-center space-y-3">
+          <div className="flex items-center justify-center gap-3">
+            <Image
+              src="/patrika-logo.png"
+              alt="Patrika"
+              width={310}
+              height={112}
+              priority
+              className="h-9 w-auto"
+            />
+            <span className="border-l pl-3">
+              <EnigmaWordmark className="text-3xl" />
+            </span>
+          </div>
           <p className="text-sm text-muted">
             Sign in with the team credentials to continue.
           </p>

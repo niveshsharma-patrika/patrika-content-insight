@@ -3,6 +3,7 @@
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
+import { EnigmaWordmark } from "./EnigmaLogo";
 
 /**
  * Minimal masthead.
@@ -26,7 +27,7 @@ export function HeaderNav() {
         <Link
           href="/"
           className="flex items-center gap-3 group min-w-0"
-          aria-label="Patrika Content Insight — home"
+          aria-label="Patrika Enigma — home"
         >
           <Image
             src="/patrika-logo.png"
@@ -36,8 +37,8 @@ export function HeaderNav() {
             priority
             className="h-7 w-auto"
           />
-          <span className="hidden sm:inline-block text-[11px] uppercase tracking-[0.16em] text-muted border-l pl-3 ml-1 self-center leading-tight">
-            Content Insight
+          <span className="border-l pl-3 ml-1 self-center">
+            <EnigmaWordmark className="text-lg" />
           </span>
         </Link>
         <nav className="flex items-center text-sm">
